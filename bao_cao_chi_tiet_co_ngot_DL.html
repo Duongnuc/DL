@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Báo cáo chi tiết: Dự đoán co ngót SCC bằng học sâu và học máy</title>
+<style>
+  :root{ --blue:#1f3b6f; --accent:#c0504d; --soft:#3b6fb6; --green:#3a7a3a; --bg:#ffffff; --gray:#f4f6f9; --line:#d9dee5; }
+  *{ box-sizing:border-box; }
+  body{ font-family:"Segoe UI","Times New Roman",serif; color:#1c2330; line-height:1.7;
+        max-width:1020px; margin:0 auto; padding:32px 28px 80px; background:var(--bg); }
+  h1{ color:var(--blue); font-size:1.8rem; border-bottom:3px solid var(--blue); padding-bottom:10px; line-height:1.35; }
+  h2{ color:var(--blue); margin-top:2.4em; border-left:6px solid var(--soft); padding-left:12px; }
+  h3{ color:var(--accent); margin-top:1.6em; }
+  .sub{ color:#555; font-size:1.02rem; margin-top:-6px; }
+  .meta{ background:var(--gray); border:1px solid var(--line); border-radius:8px; padding:14px 18px; font-size:.95rem; }
+  table{ border-collapse:collapse; width:100%; margin:16px 0; font-size:.9rem; }
+  th,td{ border:1px solid var(--line); padding:6px 9px; text-align:center; }
+  th{ background:var(--blue); color:#fff; }
+  td.l,th.l{ text-align:left; }
+  tr:nth-child(even) td{ background:#f8fafc; }
+  .best{ background:#e8f3e8 !important; font-weight:600; }
+  .bad{ color:var(--accent); font-weight:600; }
+  figure{ margin:18px 0; text-align:center; }
+  figure img{ max-width:100%; border:1px solid var(--line); border-radius:6px; }
+  figcaption{ font-size:.88rem; color:#555; margin-top:6px; font-style:italic; }
+  .term{ background:#f3f7ee; border:1px solid #cfdfc2; border-left:5px solid var(--green); border-radius:0 8px 8px 0;
+         padding:10px 16px; margin:12px 0; font-size:.93rem; }
+  .term b:first-child{ color:var(--green); }
+  .box{ background:var(--gray); border-left:5px solid var(--soft); border-radius:0 8px 8px 0;
+        padding:12px 18px; margin:14px 0; }
+  .warn{ background:#fdf3f2; border-left:5px solid var(--accent); }
+  .ok{ background:#eef6ee; border-left:5px solid #4a8a4a; }
+  .why{ background:#fff8ec; border:1px solid #e8d8b0; border-left:5px solid #d6a13a; border-radius:0 8px 8px 0;
+        padding:8px 16px; margin:8px 0; font-size:.92rem; }
+  .why b{ color:#9a6a14; }
+  code{ background:#eef1f5; padding:1px 6px; border-radius:4px; font-size:.88em; }
+  .toc{ background:var(--gray); border:1px solid var(--line); border-radius:8px; padding:14px 26px; }
+  .toc a{ color:var(--blue); text-decoration:none; }
+  .toc a:hover{ text-decoration:underline; }
+  .formula{ background:#f8fafc; border:1px dashed var(--line); padding:8px 14px; border-radius:6px;
+            font-family:"Cambria Math",serif; text-align:center; margin:10px 0; }
+  ul.tight li{ margin:.3em 0; }
+  sup,sub{ font-size:.75em; }
+  @media print{ body{ max-width:none; } h2{ page-break-after:avoid; } figure{ page-break-inside:avoid; } }
+</style>
+</head>
+<body>
+
+<h1>Dự đoán co ngót tổng của bê tông tự lèn (SCC) bằng học sâu và học máy<br>— báo cáo chi tiết —</h1>
+<p class="sub">Báo cáo trình bày toàn bộ nghiên cứu theo trình tự, giải thích thuật ngữ ngay khi xuất hiện; mọi nhận định đều kèm con số thật lấy từ kết quả thực nghiệm.</p>
+
+<div class="meta">
+  <b>Bài toán:</b> cho thành phần cấp phối bê tông + điều kiện môi trường + thời gian khô, dự đoán độ co ngót tổng.<br>
+  <b>Dữ liệu:</b> 851 đường co ngót / 6.933 điểm đo, lọc từ cơ sở dữ liệu 438 tài liệu công bố (1991–2024), 208 nguồn sau lọc.<br>
+  <b>Mô hình:</b> 9 kiến trúc học sâu + 2 mô hình cây tăng cường gradient + 4 công thức thiết kế kinh nghiệm — tổng 15 phương án trên cùng một sơ đồ đánh giá.
+</div>
+
+<div class="box">
+<b>Cách đọc báo cáo.</b> Mỗi thuật ngữ xuất hiện
+lần đầu được giải thích ngay trong ô xanh lá <span style="color:var(--green); font-weight:600">「Thuật ngữ」</span>;
+mỗi quyết định kỹ thuật có ô vàng <span style="color:#9a6a14; font-weight:600">「Vì sao làm vậy」</span> nêu rõ động cơ.
+Mọi con số đều lấy từ file kết quả thật trong thư mục <code>output_kfold*</code>, không có số minh họa.
+Cuối báo cáo có bảng tra cứu thuật ngữ (mục 15) và danh sách toàn bộ mã nguồn (mục 14) để tra lại.
+</div>
+
+<div class="toc">
+<b>Mục lục</b>
+<ol>
+  <li><a href="#s1">Mở đầu: toàn cảnh nghiên cứu</a></li>
+  <li><a href="#s2">Bài toán: co ngót là gì và vì sao khó dự đoán</a></li>
+  <li><a href="#s3">Dữ liệu: từ 438 tài liệu thành 6.933 điểm đo sạch</a></li>
+  <li><a href="#s4">Khái niệm trung tâm: rò rỉ dữ liệu — và nấc thang ba bậc của nó</a></li>
+  <li><a href="#s5">Sơ đồ đánh giá: kiểm chứng chéo 5 fold theo nhóm</a></li>
+  <li><a href="#s6">15 phương án dự đoán: 9 học sâu, 2 cây, 4 công thức</a></li>
+  <li><a href="#s7">Huấn luyện và tinh chỉnh siêu tham số</a></li>
+  <li><a href="#s8">Thước đo: R², RMSE, MAE nghĩa là gì trên dữ liệu này</a></li>
+  <li><a href="#s9">Kết quả chính: bảng xếp hạng và ba kết luận bên trong nó</a></li>
+  <li><a href="#s10">Kết quả có đáng tin không? Bốn phép kiểm tra độ bền</a></li>
+  <li><a href="#s11">Mô hình "nghĩ" gì: SHAP và đồ thị phụ thuộc riêng phần</a></li>
+  <li><a href="#s12">Khoảng dự đoán conformal: dự đoán kèm cam kết</a></li>
+  <li><a href="#s13">Kết luận</a></li>
+  <li><a href="#s14">Hạn chế trung thực + toàn bộ file để tái lập</a></li>
+  <li><a href="#s15">Bảng tra cứu thuật ngữ</a></li>
+</ol>
+</div>
+
+<!-- ===================================================== -->
+<h2 id="s1">1. Mở đầu: toàn cảnh nghiên cứu</h2>
+<p>
+Mục tiêu: <b>dạy máy tính dự đoán bê tông tự lèn
+sẽ co lại bao nhiêu theo thời gian</b>. 
+</p>
+<ul class="tight">
+  <li><b>Dữ liệu:</b> gom 6.933 số đo co ngót từ 438 tài liệu đã công bố, rồi cho 15 phương án dự đoán — 9 mạng học sâu, 2 mô hình cây, 4 công thức thiết kế kinh điển </li>
+  <li><b>Mô hình tốt nhất:</b> mô hình cây LightGBM, R² = 0,783 — giải thích ~78% biến thiên của co ngót trên dữ liệu chưa từng thấy. Mô hình học sâu tốt nhất (LSTM) đạt 0,744. Bốn công thức kinh điển (ACI 209, B3, B4, fib MC2010) chỉ đạt 0,28–0,42.</li>
+  <li><b>Nhưng điều đáng nhớ nhất không phải con số đó.</b> <i>Cùng một mô hình</i> sẽ được R² = 0,944 nếu chấm điểm cẩu thả (chia dữ liệu ngẫu nhiên), 0,78 nếu chấm nghiêm túc (tách theo mẻ bê tông), và chỉ 0,54 nếu chấm khắc nghiệt (tách theo phòng thí nghiệm). Phần lớn nghiên cứu đã công bố đưa con số kiểu 0,9 — tức là đang đứng ở bậc thang đầu tiên. Mục 4 dành riêng để phân tích điều này.</li>
+  <li><b>Đi kèm:</b> kiểm định thống kê cho mọi so sánh, khoảng dự đoán có cam kết độ phủ 90%, phân tích yếu tố nào chi phối co ngót.</li>
+</ul>
+
+<!-- ===================================================== -->
+<h2 id="s2">2. Bài toán: co ngót là gì và vì sao khó dự đoán</h2>
+
+<p>
+Bê tông sau khi đổ không giữ nguyên kích thước: nước trong các lỗ rỗng li ti bay hơi dần, phản ứng thủy hóa
+xi măng tiếp tục tiêu thụ nước, và khối bê tông <b>co lại từ từ trong nhiều tháng đến nhiều năm</b>. Biến dạng đó
+gọi là <b>co ngót</b>. Nếu kết cấu bị giữ chặt hai đầu (dầm, sàn, vách), phần co bị cản trở chuyển thành ứng suất kéo
+— mà bê tông chịu kéo rất kém — sinh ra <b>nứt</b>, mất ứng suất trước trong cáp dự ứng lực, võng tăng theo thời gian.
+Dự đoán sai co ngót là dự đoán sai tuổi thọ kết cấu.
+</p>
+
+<div class="term"><b>Đơn vị ×10⁻⁶ (microstrain).</b> Co ngót được đo bằng biến dạng tương đối: thanh dài 1 m co
+ngắn đi 0,3 mm thì biến dạng là 0,3/1000 = 300×10⁻⁶. Trong dữ liệu này, co ngót đo được nằm trong khoảng
+0–1376×10⁻⁶, trung vị 332×10⁻⁶. Mọi sai số (RMSE, MAE) trong báo cáo đều tính theo đơn vị này.</div>
+
+<div class="term"><b>Co ngót tổng (total shrinkage).</b> Gồm hai phần cộng lại: co ngót <i>khô</i> (mất nước ra môi
+trường) và co ngót <i>tự sinh</i> (xi măng thủy hóa tự hút nước nội bộ, đáng kể khi tỉ lệ nước thấp). Nghiên cứu này
+dự đoán tổng hai phần — đúng đại lượng người thiết kế cần.</div>
+
+<div class="term"><b>Bê tông tự lèn (SCC — self-compacting concrete).</b> Loại bê tông tự chảy lấp đầy ván khuôn
+mà không cần đầm rung. Muốn vậy phải trộn nhiều <i>bột mịn</i> (xi măng + tro bay + xỉ lò cao + bột đá) và dùng phụ gia
+siêu dẻo. Hệ quả: thể tích hồ kết dính lớn hơn, cốt liệu thô ít hơn bê tông thường — mà co ngót xảy ra trong hồ,
+còn cốt liệu là "khung xương" cản co. Vì vậy SCC thường co nhiều hơn, và các công thức thiết kế hiệu chỉnh trên
+bê tông thường trở nên kém chính xác.</div>
+
+<p><b>Hai cách dự đoán co ngót hiện có, và lỗ hổng của chúng:</b></p>
+<ul class="tight">
+  <li><b>Công thức kinh nghiệm</b> trong tiêu chuẩn (ACI 209R-92, B3, B4, fib MC2010): vài phương trình với chục hệ số,
+  hiệu chỉnh trên dữ liệu bê tông thường từ nhiều thập kỷ trước. Ưu điểm: minh bạch, có cơ sở vật lý. Nhược điểm: kém chính xác
+  với vật liệu mới như SCC (mục 9 sẽ định lượng chính xác kém bao nhiêu).</li>
+  <li><b>Mô hình học máy</b> trong các nghiên cứu gần đây: chính xác hơn hẳn trên giấy (R² thường được báo cáo
+  quanh 0,9) nhưng đa số <i>chấm điểm sai cách</i> — đây chính là khoảng trống mà nghiên cứu này nhắm vào (mục 4).</li>
+</ul>
+
+<div class="term"><b>Học máy (machine learning) và học sâu (deep learning).</b> Học máy: thay vì con người viết
+công thức, máy tự tìm quy luật từ các ví dụ (ở đây: 6.933 ví dụ "cấp phối này + chừng ấy ngày → co chừng này").
+Học sâu là nhánh học máy dùng <i>mạng nơ-ron</i> — nhiều lớp phép nhân ma trận + hàm phi tuyến xếp chồng — có khả năng
+học các quan hệ phức tạp. "Sâu" nghĩa là nhiều lớp.</div>
+
+<!-- ===================================================== -->
+<h2 id="s3">3. Dữ liệu: từ 438 tài liệu thành 6.933 điểm đo sạch</h2>
+<p>Nhân vật chính của mọi nghiên cứu học máy là dữ liệu.</p>
+
+<h3>3.1 Một "mẫu" dữ liệu trông như thế nào</h3>
+<p>
+Cơ sở dữ liệu tổng hợp từ 438 tài liệu công bố
+1991–2024 (1.901 đường co ngót, 16.289 điểm đo thô). Mỗi thí nghiệm gốc diễn ra như sau: đúc mẫu bê tông, dưỡng hộ
+vài ngày, rồi đặt vào phòng khí hậu và <b>đo chiều dài định kỳ</b> — 7 ngày, 14 ngày, 28 ngày, 90 ngày... Kết quả là một
+<b>đường cong co ngót theo thời gian</b>: tăng nhanh lúc đầu, chậm dần, tiệm cận một giá trị cuối.
+</p>
+
+<div class="term"><b>GID (group ID — mã nhóm).</b> Mã định danh một đường co ngót: một mẻ trộn cụ thể, đo nhiều
+thời điểm. Ví dụ GID <code>s_002_02_5</code> có nhiều dòng dữ liệu — mỗi dòng một thời điểm đo. <b>Đây là khái niệm
+then chốt của toàn nghiên cứu:</b> các điểm trong cùng GID giống nhau gần như hoàn toàn (cùng cấp phối, cùng mẫu,
+chỉ khác ngày đo), nên không bao giờ được phép để chúng "rơi" vào cả phần học lẫn phần thi (mục 4). Cấu trúc mã
+<code>s_&lt;nguồn&gt;_&lt;cấp phối&gt;_&lt;số&gt;</code> còn cho biết đường đó lấy từ tài liệu nguồn nào — sau lọc còn
+<b>208 nguồn</b>, trung vị 2 đường/nguồn, nguồn lớn nhất đóng góp 63 đường.</div>
+
+<figure>
+<img src="output_figures/illust01_data_sample.png" alt="Minh họa một mẫu dữ liệu">
+<figcaption>Một GID = một đường co ngót gồm nhiều điểm đo theo thời gian.</figcaption>
+</figure>
+
+<h3>3.2 Lọc dữ liệu</h3>
+<p>Từ 1.901 đường thô, giữ lại theo các tiêu chí: chỉ co ngót <i>tổng</i> (loại các đường chỉ đo co khô hoặc tự sinh);
+cường độ nén 28 ngày trong 17–110 MPa; dưỡng hộ tiêu chuẩn 20–30 °C; độ ẩm tương đối ≥ 40%; đường đo phải
+<i>tăng đơn điệu</i> (đường co rồi lại "nở" bất thường thường là lỗi đo); bỏ trùng lặp. Kết quả:</p>
+<ul class="tight">
+  <li><b>Bộ dạng bảng:</b> 851 đường / 6.933 điểm — dùng cho các mô hình nhận từng dòng độc lập.</li>
+  <li><b>Bộ dạng chuỗi:</b> 788 đường / 6.741 điểm (chỉ giữ đường có ≥ 5 điểm đo) — dùng cho các mô hình đọc cả đường cong.</li>
+</ul>
+
+<h3>3.3 Đặc trưng đầu vào — máy "nhìn thấy" gì</h3>
+<p>Mỗi dòng có <b>47 đặc trưng</b> (36 cột số + 11 cột phân loại đã mã hóa), nhóm chính và khoảng giá trị thật:</p>
+<table>
+<thead><tr><th class="l">Đặc trưng</th><th>Ký hiệu</th><th>Khoảng</th><th>Trung vị</th><th class="l">Vì sao quan trọng</th></tr></thead>
+<tbody>
+<tr><td class="l">Tỉ lệ nước/chất kết dính</td><td>w/cm</td><td>0,18–0,60</td><td>0,36</td><td class="l">nhiều nước → nhiều lỗ rỗng mất nước → co nhiều</td></tr>
+<tr><td class="l">Cường độ nén 28 ngày (MPa)</td><td>f<sub>cm28</sub></td><td>18–108</td><td>53</td><td class="l">đại diện "chất lượng hồ": đặc chắc hơn → khó mất nước</td></tr>
+<tr><td class="l">Tỉ số thể tích/diện tích bề mặt (mm)</td><td>V/S</td><td>11,4–41,9</td><td>—</td><td class="l">mẫu càng "dày" → nước thoát càng chậm → co chậm</td></tr>
+<tr><td class="l">Độ ẩm tương đối môi trường</td><td>RH</td><td>0,40–0,87</td><td>—</td><td class="l">không khí càng khô → hút nước khỏi bê tông càng mạnh</td></tr>
+<tr><td class="l">Tuổi bắt đầu khô (ngày)</td><td>t₀</td><td>0,25–90</td><td>—</td><td class="l">dưỡng hộ lâu → xi măng thủy hóa kỹ → nền cứng hơn khi bắt đầu khô</td></tr>
+<tr><td class="l">Tổng cốt liệu (kg/m³)</td><td>agg_total</td><td>1292–2060</td><td>—</td><td class="l">cốt liệu là khung cản co</td></tr>
+<tr><td class="l">Phụ gia khoáng (% chất kết dính)</td><td>FlyAsh, Slag, SF, Filler</td><td>0–…</td><td>0</td><td class="l">thay đổi tốc độ thủy hóa và cấu trúc lỗ rỗng</td></tr>
+<tr><td class="l"><b>Thời gian khô (ngày)</b></td><td>dt</td><td>0–1149</td><td>28</td><td class="l">biến "trục hoành" của đường cong — quan trọng nhất</td></tr>
+<tr><td class="l"><b>Mục tiêu: co ngót tổng (×10⁻⁶)</b></td><td>y</td><td>0–1376</td><td>332</td><td class="l">đại lượng cần dự đoán</td></tr>
+</tbody>
+</table>
+
+<figure>
+<img src="output_figures/fig10_data_distributions.png" alt="Phân bố các đặc trưng">
+<figcaption>Phân bố các đặc trưng chính: nhiều biến lệch phải (đuôi dài về phía giá trị lớn).</figcaption>
+</figure>
+
+<div class="term"><b>Biến đổi log1p.</b> Co ngót phân bố lệch phải (nhiều giá trị nhỏ, ít giá trị rất lớn). Mô hình
+học trên giá trị thô sẽ bị vài điểm lớn "kéo" toàn bộ. Giải pháp chuẩn: học trên log(1+y) thay vì y — phân bố trở nên
+cân hơn — rồi đảo ngược exp(−1) khi báo kết quả. <b>Mọi chỉ số trong báo cáo đều đã đảo về thang gốc</b>, nên đọc trực
+tiếp theo ×10⁻⁶.</div>
+
+<figure>
+<img src="output_figures/illust02_log1p.png" alt="Minh họa log1p">
+<figcaption>Trước/sau biến đổi log1p: phân bố mục tiêu bớt lệch hẳn.</figcaption>
+</figure>
+
+<div class="warn box"><b>Một đặc điểm dữ liệu phải cảnh giác: các biến cấp phối "dính" nhau.</b> w/cm tương quan
+−0,53 với cường độ (nước nhiều → yếu), −0,82 với lượng chất kết dính, chất kết dính tương quan −0,64 với cốt liệu
+(đầy 1 m³ thì cái này nhiều cái kia ít). Hiện tượng này gọi là <b>đa cộng tuyến</b> — không cản trở việc <i>dự đoán</i>,
+nhưng khiến việc <i>quy công lao</i> cho từng biến (mục 11) phải đọc thận trọng: công của "nước ít" có thể bị ghi
+một phần cho "cường độ cao" vì hai biến luôn đi cùng nhau.</div>
+
+<figure>
+<img src="output_figures/fig11_correlation_heatmap.png" alt="Ma trận tương quan">
+<figcaption>Ma trận tương quan giữa các đặc trưng — các ô đậm ngoài đường chéo là các cặp biến "dính" nhau.</figcaption>
+</figure>
+
+<!-- ===================================================== -->
+<h2 id="s4">4. Khái niệm trung tâm: rò rỉ dữ liệu — và nấc thang ba bậc của nó</h2>
+
+<p>Đây là phần quan trọng nhất của báo cáo. Nếu chỉ rút ra một điều duy nhất từ toàn bộ nghiên cứu, nên là điều này.</p>
+
+<div class="term"><b>Train / test (tập học / tập thi).</b> Quy tắc vàng của học máy: giấu một phần dữ liệu đi
+(test), chỉ cho mô hình học phần còn lại (train), rồi chấm điểm trên phần đã giấu. Điểm trên test mới phản ánh khả
+năng dự đoán <i>cái chưa thấy</i> — điểm trên train chỉ phản ánh khả năng ghi nhớ.</div>
+
+<div class="term"><b>Rò rỉ dữ liệu (data leakage).</b> Mọi con đường để thông tin của tập thi lọt vào quá trình học.
+Hậu quả luôn cùng chiều: <b>điểm số đẹp giả tạo</b> — mô hình trông giỏi hơn thực tế.</div>
+
+<p>
+Với dữ liệu co ngót, cái bẫy nằm ở cấu trúc nhóm. Một đường co ngót có ~8 điểm đo gần như sinh đôi. Nếu chia
+dữ liệu <b>ngẫu nhiên theo từng dòng</b> — cách phổ biến nhất trong các nghiên cứu đã công bố — thì điểm ngày 28 của mẻ X
+nằm trong tập học, điểm ngày 56 của <i>chính mẻ X</i> nằm trong tập thi. Mô hình chỉ cần "nhớ mặt" mẻ X là đoán trúng.
+Giống hệt cho học sinh ôn đúng đề thi: điểm cao nhưng không nói lên năng lực.
+</p>
+
+<figure>
+<img src="output_figures/illust05_group_split.png" alt="Minh họa chia theo nhóm vs ngẫu nhiên">
+<figcaption>Chia ngẫu nhiên theo dòng (trái) để các điểm cùng một đường lọt vào cả hai phía; chia theo nhóm (phải) giữ trọn từng đường về một phía.</figcaption>
+</figure>
+
+<p><b>Nghiên cứu này đo đếm trực tiếp cái giá của rò rỉ ở ba bậc. Điểm mấu chốt: cả ba bậc dùng CHUNG đúng một bộ
+6.933 điểm đo — không có bộ dữ liệu nào khác — chỉ khác nhau ở chỗ <i>giấu cái gì đi để chấm</i> (độ khó tăng dần):</b></p>
+<table>
+<thead><tr><th class="l">Cách chia — giấu gì khỏi tập học (cùng 6.933 điểm)</th><th>Câu hỏi thực tế tương ứng</th><th>R²</th></tr></thead>
+<tbody>
+<tr><td class="l">① <b>Ngẫu nhiên theo điểm đo</b>: giấu lẻ từng điểm, các điểm khác <i>của cùng một mẻ</i> vẫn nằm trong tập học (cách đa số bài báo dùng)</td><td class="l">"Đoán nốt vài điểm còn thiếu của một đường <i>đã đo dở</i>?"</td><td class="bad">0,944</td></tr>
+<tr><td class="l">② <b>Theo đường co ngót — GID</b>: giấu trọn một mẻ, nhưng các mẻ khác <i>của cùng phòng</i> vẫn trong tập học (cách chính của nghiên cứu này)</td><td class="l">"Dự đoán một <i>cấp phối mới</i> của phòng thí nghiệm đã biết?"</td><td>0,78</td></tr>
+<tr><td class="l">③ <b>Theo nguồn tài liệu — 208 nguồn</b>: giấu trọn một phòng, không còn số đo nào của phòng đó trong tập học (kiểm tra bổ sung)</td><td class="l">"Dự đoán cho một <i>phòng thí nghiệm hoàn toàn mới</i>?"</td><td><b>0,54</b></td></tr>
+</tbody>
+</table>
+
+<div class="box">
+<b>Vì sao cùng một bộ dữ liệu lại ra ba con số khác nhau?</b> Vì chấm ba lần với độ khó tăng dần, <i>không phải</i>
+ba bộ dữ liệu khác nhau. Ví dụ tí hon: giả sử cơ sở dữ liệu chỉ gồm Phòng A (mẻ A1, A2 — mỗi mẻ đo ngày 7 / 28 / 90)
+và vài phòng khác. Vẫn đống số đo đó, chấm theo ba kiểu giấu bài:
+<ul class="tight">
+<li><b>Bậc ① → 0,944:</b> giấu "A1 ngày 28" nhưng vẫn để lộ "A1 ngày 7" và "A1 ngày 90" trong tập học → mô hình chỉ
+việc nội suy giữa hai điểm <i>cùng một mẻ</i> nó đã thấy → quá dễ.</li>
+<li><b>Bậc ② → 0,78:</b> giấu trọn mẻ A1, nhưng mẻ A2 <i>cùng Phòng A</i> vẫn được học → mô hình vẫn "ngầm biết" gu
+của Phòng A (loại xi măng, mỏ cốt liệu, thói quen đo).</li>
+<li><b>Bậc ③ → 0,54:</b> giấu trọn Phòng A (cả A1 lẫn A2) → mô hình <i>chưa từng thấy bất kỳ số đo nào của Phòng A</i>
+→ đúng tình huống "phòng thí nghiệm hoàn toàn mới" → khó nhất.</li>
+</ul>
+Nói cách khác, <b>không hề có "data ra 0,54" hay "data ra 0,9" riêng biệt</b> — tất cả là cùng 6.933 điểm đo (851 đường
+từ 438 tài liệu, 208 nguồn sau lọc), chỉ khác quy tắc giấu bài. Còn <b>0,54 chính là giá trị R²</b>: phần biến thiên co
+ngót mô hình giải thích được (R² = 1 hoàn hảo; R² = 0 ngang việc đoán mọi mẫu bằng trung bình; định nghĩa đầy đủ ở mục 8),
+đo trên chính mô hình mạnh nhất (LightGBM 0,541; chi tiết mục 10.4, chạy bằng <code>buoc_26</code> → <code>output_kfold_src/</code>).
+</div>
+
+<div class="why"><b>Vì sao bậc ③ thấp thế?</b> Các đường cùng một tài liệu dùng chung loại xi măng, mỏ cốt liệu,
+thiết bị và người đo. Tách theo GID vẫn cho mô hình "gặp" phòng thí nghiệm đó qua các đường khác. Tách theo nguồn thì
+gặp toàn người lạ — và những yếu tố như khoáng vật cốt liệu hay thói quen đo <i>không nằm trong 47 đặc trưng</i>, mô
+hình không có cách nào biết. Khoảng cách ②→③ (~0,24 R²) chính là phần "đặc thù phòng thí nghiệm" mà bộ đặc trưng
+hiện tại chưa mô tả được.</div>
+
+<div class="ok box"><b>Thông điệp:</b> một con số R² không có ý nghĩa nếu không nói kèm <i>cách chia dữ liệu</i>.
+R² 0,9 ở bậc ① không hề tốt hơn R² 0,78 ở bậc ② — nó chỉ trả lời một câu hỏi dễ hơn. Toàn bộ kết quả chính
+của nghiên cứu này báo cáo ở bậc ②, có kiểm tra bậc ③ và công bố cả ba con số.</div>
+
+<!-- ===================================================== -->
+<h2 id="s5">5. Sơ đồ đánh giá: kiểm chứng chéo 5 fold theo nhóm</h2>
+<p>Sau khi đã thấy cái bẫy, phần này trình bày cách tổ chức "kỳ thi" để né nó. Toàn bộ quy trình nằm gọn trong một hình:</p>
+
+<figure>
+<img src="output_figures/fig00_pipeline.png" alt="Sơ đồ toàn bộ quy trình">
+<figcaption>Toàn bộ quy trình: dữ liệu → lọc → chia 5 fold theo nhóm → tinh chỉnh + huấn luyện trong từng fold → gộp dự đoán ngoài fold → đánh giá, kiểm định, diễn giải, đối chiếu.</figcaption>
+</figure>
+
+<div class="term"><b>Kiểm chứng chéo k fold (k-fold cross-validation).</b> Thay vì giấu một phần dữ liệu một lần
+(may rủi: lỡ phần giấu toàn ca dễ?), chia dữ liệu thành 5 phần bằng nhau ("fold"). Lặp 5 lượt: mỗi lượt lấy 1 phần làm
+tập thi, 4 phần còn lại để học. Sau 5 lượt, <b>mỗi điểm dữ liệu được làm "đề thi" đúng một lần</b>, bởi một mô hình chưa
+từng thấy nó. Ở đây các fold chứa trọn vẹn từng GID (chống rò rỉ) và được cân bằng theo cường độ nén để 5 fold "khó
+đều nhau".</div>
+
+<figure>
+<img src="output_figures/illust04_kfold.png" alt="Minh họa k-fold">
+<figcaption>5 lượt chấm: mỗi fold lần lượt làm tập thi.</figcaption>
+</figure>
+
+<div class="term"><b>Train / validation / test trong từng lượt.</b> Trong 4 phần dùng để học, lại tách ra một nhóm nhỏ
+làm <b>validation (tập soát)</b>: mô hình không học trên đó, mà dùng nó để quyết định "nên dừng học khi nào" và "bộ tham số
+nào tốt hơn". Tập thi (test) chỉ được chạm vào đúng một lần cuối cùng để chấm điểm. Ba vai trò tách bạch: học — soát — thi.</div>
+
+<div class="term"><b>Dự đoán gộp ngoài fold (pooled OOF — out-of-fold).</b> Ghép dự đoán-trên-tập-thi của cả 5 lượt
+lại thành một bộ 6.933 dự đoán (mỗi điểm đúng một lần), rồi tính R²/RMSE/MAE trên bộ ghép đó. Đây là <b>con số chuẩn</b>
+được dùng xuyên suốt báo cáo, vì nó dùng toàn bộ dữ liệu mà vẫn không rò rỉ.</div>
+
+<div class="term"><b>Seed (hạt giống ngẫu nhiên).</b> Việc xáo trộn để chia fold dùng số khởi đầu cố định (42) cho bộ
+sinh số ngẫu nhiên — chạy lại sẽ ra đúng phép chia cũ, người khác tái lập được. Mục 10 kiểm tra thêm: đổi seed sang 43,
+44 thì kết quả gần như không đổi.</div>
+
+<div class="why"><b>Vì sao mọi tiền xử lý phải làm "bên trong" từng fold?</b> Điền giá trị thiếu bằng trung vị,
+chuẩn hóa về trung bình 0... nghe vô hại, nhưng nếu tính trung vị trên <i>toàn bộ</i> dữ liệu thì con số đó đã "nhìn
+thấy" tập thi — một dạng rò rỉ tinh vi. Quy trình ở đây tính mọi tham số tiền xử lý chỉ trên phần học của từng fold
+rồi áp sang phần thi.</div>
+
+<!-- ===================================================== -->
+<h2 id="s6">6. Mười lăm phương án dự đoán: 9 học sâu, 2 cây, 4 công thức</h2>
+<p>Sau sơ đồ chấm điểm là phần giới thiệu các "thí sinh": vì sao chọn đúng những phương án này, và mỗi phương án đại diện cho điều gì.</p>
+
+<h3>6.1 Sáu mô hình học sâu "dạng bảng" — nhận từng dòng độc lập</h3>
+<table>
+<thead><tr><th class="l">Mô hình</th><th class="l">Một câu mô tả cho người mới</th><th class="l">Vai trò trong benchmark</th></tr></thead>
+<tbody>
+<tr><td class="l">ANNBasic</td><td class="l">Mạng nơ-ron "đời đầu": vài lớp ẩn trần trụi, không kỹ thuật ổn định hóa nào.</td><td class="l">mốc lịch sử — thế hệ 1990s–2000s</td></tr>
+<tr><td class="l">MLP_Tapered</td><td class="l">Như trên nhưng các lớp thon dần (rộng → hẹp) + các kỹ thuật hiện đại nhẹ.</td><td class="l">MLP hiện đại hóa mức vừa</td></tr>
+<tr><td class="l">ResMLP</td><td class="l">MLP + <b>kết nối tắt</b> (đường vòng cho tín hiệu, dễ huấn luyện sâu) + <b>chuẩn hóa theo lô</b> (giữ tín hiệu trong tầm kiểm soát).</td><td class="l">MLP hiện đại đầy đủ</td></tr>
+<tr><td class="l">FT-Transformer</td><td class="l">Đưa cơ chế <b>attention</b> (mỗi đặc trưng "nhìn" các đặc trưng khác để quyết định cái gì đáng chú ý) — kiến trúc đứng sau ChatGPT — vào dữ liệu bảng.</td><td class="l">đại diện Transformer cho bảng</td></tr>
+<tr><td class="l">TabNet</td><td class="l">Mạng tự chọn lọc đặc trưng theo từng bước, thiết kế riêng cho dữ liệu bảng.</td><td class="l">kiến trúc chuyên-bảng nổi tiếng</td></tr>
+<tr><td class="l">DCNv2</td><td class="l">Mạng có nhánh chuyên học <b>tích chéo</b> giữa các đặc trưng (kiểu w/cm × RH).</td><td class="l">đại diện họ "cross network"</td></tr>
+</tbody>
+</table>
+
+<h3>6.2 Ba mô hình học sâu "dạng chuỗi" — đọc cả đường cong</h3>
+<p>Khác biệt căn bản: thay vì xem từng điểm đo độc lập, các mô hình này nhận <b>cả dãy điểm đo theo thứ tự thời
+gian</b> của một đường, nên có thể học "dáng" của đường cong (tăng nhanh rồi bão hòa).</p>
+<table>
+<thead><tr><th class="l">Mô hình</th><th class="l">Một câu mô tả</th></tr></thead>
+<tbody>
+<tr><td class="l">LSTM</td><td class="l">Mạng hồi tiếp có "ô nhớ" với ba cổng (vào/quên/ra) — đọc chuỗi từ trái sang phải, mang theo trí nhớ dài hạn. Chuẩn mực cho chuỗi thời gian từ 1997.</td></tr>
+<tr><td class="l">GRU</td><td class="l">Bản rút gọn của LSTM (hai cổng) — ít tham số hơn, thường ngang ngửa.</td></tr>
+<tr><td class="l">TCN</td><td class="l">Họ <b>1D CNN</b> (tích chập một chiều) cho chuỗi: các bộ lọc trượt dọc trục thời gian với độ giãn tăng dần. Đây chính là đại diện CNN trong benchmark.</td></tr>
+</tbody>
+</table>
+
+<div class="term"><b>Đệm và mặt nạ (padding &amp; masking).</b> Các đường có độ dài khác nhau (5–30+ điểm) nhưng máy
+tính xử lý theo lô cần các chuỗi bằng nhau, nên chuỗi ngắn được "độn" thêm số 0 cho đủ dài — kèm một <i>mặt nạ</i>
+đánh dấu chỗ nào là độn để mô hình bỏ qua, không tính vào sai số.</div>
+
+<figure>
+<img src="output_figures/illust06_padding.png" alt="Minh họa padding">
+<figcaption>Chuỗi ngắn được đệm 0 + mặt nạ để xếp chung một lô.</figcaption>
+</figure>
+
+<h3>6.3 Hai mô hình cây tăng cường gradient (GBDT) — "đối thủ đáng gờm"</h3>
+<div class="term"><b>GBDT (gradient-boosted decision trees).</b> Không phải mạng nơ-ron. Một <i>cây quyết định</i> là
+chuỗi câu hỏi rẽ nhánh ("w/cm &gt; 0,4? → RH &lt; 0,6? → dự đoán 350"). GBDT xây <b>hàng trăm cây nối tiếp, cây sau
+chuyên sửa lỗi của tổng các cây trước</b>. Hai cài đặt phổ biến nhất là <b>XGBoost</b> và <b>LightGBM</b>. Giới nghiên
+cứu dữ liệu bảng biết rõ: với dữ liệu cỡ vài nghìn dòng, đặc trưng hỗn tạp, GBDT thường thắng học sâu — nên một
+benchmark học sâu <i>thiếu</i> GBDT sẽ bị phản biện hỏi ngay.</div>
+<p>Hai mô hình này được huấn luyện trên <b>đúng cùng fold, cùng tiền xử lý, cùng ngân sách tinh chỉnh</b> như 9 mô hình
+học sâu — bảo đảm so sánh công bằng tuyệt đối.</p>
+
+<h3>6.4 Bốn công thức kinh nghiệm — "phe tiêu chuẩn thiết kế"</h3>
+<table>
+<thead><tr><th class="l">Công thức</th><th class="l">Xuất xứ</th><th class="l">Ghi chú</th></tr></thead>
+<tbody>
+<tr><td class="l">ACI 209R-92</td><td class="l">Viện Bê tông Hoa Kỳ, 1992</td><td class="l">dạng hyperbol đơn giản, phổ biến nhất</td></tr>
+<tr><td class="l">B3</td><td class="l">Bažant &amp; Baweja, RILEM 1995</td><td class="l">nền tảng vật lý khuếch tán ẩm</td></tr>
+<tr><td class="l">B4</td><td class="l">RILEM TC-242-MDC, 2015</td><td class="l">kế nhiệm B3, thêm số hạng co tự sinh</td></tr>
+<tr><td class="l">fib MC2010</td><td class="l">Bộ luật mẫu châu Âu, 2010</td><td class="l">cơ sở của Eurocode hiện đại</td></tr>
+</tbody>
+</table>
+<p>Mỗi công thức được chấm 2 lần: <b>nguyên bản</b> (đúng hệ số trong tiêu chuẩn) và <b>sau hiệu chỉnh</b> (nhân thêm
+một hệ số k tối ưu bình phương tối thiểu trên dữ liệu này — cho công thức "lợi thế sân nhà" tối đa có thể).</p>
+
+<!-- ===================================================== -->
+<h2 id="s7">7. Huấn luyện và tinh chỉnh siêu tham số</h2>
+<p>Trước khi đến kết quả, phần này nói nhanh chuyện "luyện thi"; vài khái niệm ở đây sẽ quay lại trong phần kiểm tra độ bền.</p>
+
+<div class="term"><b>Tham số vs siêu tham số.</b> <i>Tham số</i> là các con số mô hình tự học (trọng số). <i>Siêu tham
+số</i> là các "núm vặn" con người phải chọn trước: mạng mấy lớp, mỗi lớp bao nhiêu nơ-ron, tốc độ học bao nhiêu, cây sâu
+mấy tầng... Chọn núm khác nhau, chất lượng khác hẳn nhau — nên phải dò.</div>
+
+<div class="term"><b>Optuna và "trial".</b> Optuna là thư viện dò siêu tham số thông minh: thử một bộ núm (= 1 trial),
+xem điểm trên tập soát, rồi <i>suy luận vùng nào hứa hẹn</i> để thử bộ tiếp theo (thuật toán TPE) thay vì thử mò.
+Nghiên cứu này cho mỗi mô hình <b>8 trial trong từng fold</b> — ngân sách khiêm tốn nhưng <i>bằng nhau tuyệt đối</i>
+giữa 11 mô hình, và riêng từng fold để không rò rỉ giữa các fold. Mục 10 kiểm tra điều gì xảy ra nếu tăng lên 30 trial.</div>
+
+<div class="term"><b>Epoch và dừng sớm (early stopping).</b> Một epoch = mô hình xem hết một lượt tập học. Học quá
+nhiều epoch thì bắt đầu "học vẹt" (thuộc lòng tập học, kém dần trên dữ liệu mới) — gọi là <b>quá khớp (overfitting)</b>.
+Dừng sớm: sau mỗi epoch, đo sai số trên tập soát; khi sai số soát ngừng cải thiện 12–20 epoch liên tiếp thì dừng và lùi
+về thời điểm tốt nhất. Với GBDT, tương tự: ngừng thêm cây khi tập soát ngừng cải thiện 100 vòng.</div>
+
+<div class="term"><b>AdamW.</b> Thuật toán cập nhật trọng số khi huấn luyện mạng nơ-ron (biến thể chuẩn hiện nay của
+gradient descent): tự điều chỉnh bước đi cho từng trọng số + một lực "kéo trọng số về 0" (weight decay) để hạn chế quá khớp.</div>
+
+<figure>
+<img src="output_figures/fig09_learning_curves.png" alt="Đường cong học">
+<figcaption>Đường cong học: sai số trên tập học giảm mãi, sai số trên tập soát chạm đáy rồi đi ngang/tăng — điểm dừng sớm nằm ở đáy.</figcaption>
+</figure>
+
+<!-- ===================================================== -->
+<h2 id="s8">8. Thước đo: R², RMSE, MAE nghĩa là gì trên dữ liệu này</h2>
+<p>Một bước chuẩn bị cuối cùng: thống nhất về thước đo, để các con số ở mục sau gắn với độ lớn thật chứ không trừu tượng.</p>
+
+<div class="term"><b>R² (hệ số xác định).</b> Trả lời: "mô hình giải thích được bao nhiêu phần biến thiên của co
+ngót?" R² = 1: dự đoán hoàn hảo. R² = 0: chẳng hơn gì việc đoán mọi mẫu đều co bằng <i>giá trị trung bình</i>.
+<b>R² âm: tệ hơn cả đoán trung bình</b> (xảy ra thật trong benchmark này — xem ANNBasic và công thức B4). Lưu ý đây là
+hệ số xác định tính trên dự đoán, không phải bình phương hệ số tương quan Pearson — hai thứ hay bị lẫn.</div>
+
+<div class="term"><b>RMSE (căn sai số toàn phương trung bình).</b> Sai số "điển hình", phạt nặng các cú trượt lớn.
+Cảm nhận độ lớn: co ngót trung vị của dữ liệu là 332×10⁻⁶; RMSE 98×10⁻⁶ của LightGBM nghĩa là dự đoán lệch điển hình
+cỡ 30% giá trị trung vị.</div>
+
+<div class="term"><b>MAE (sai số tuyệt đối trung bình).</b> Trung bình cộng của |dự đoán − thực|, không phạt nặng cú
+trượt lớn. MAE luôn ≤ RMSE; hai số càng xa nhau chứng tỏ càng có những cú trượt lớn lẻ tẻ.</div>
+
+<!-- ===================================================== -->
+<h2 id="s9">9. Kết quả chính: bảng xếp hạng và ba kết luận bên trong nó</h2>
+<p>Đây là phần kết quả chính. Bảng tổng sắp được đưa ra trước, tiếp theo là ba điểm đáng chú ý còn đáng giá hơn chính bảng xếp hạng.</p>
+
+<h3>9.1 Bảng tổng sắp (chia theo GID — bậc ②, dự đoán gộp ngoài fold)</h3>
+<table>
+<thead><tr><th class="l">Mô hình</th><th>Loại</th><th>R² gộp OOF</th><th>Khoảng tin cậy 95%</th><th>RMSE (×10⁻⁶)</th><th>MAE (×10⁻⁶)</th></tr></thead>
+<tbody>
+<tr class="best"><td class="l">LightGBM</td><td>cây</td><td>0,783</td><td>0,750 – 0,815</td><td>97,7</td><td>61,7</td></tr>
+<tr class="best"><td class="l">XGBoost</td><td>cây</td><td>0,777</td><td>0,739 – 0,811</td><td>99,1</td><td>61,5</td></tr>
+<tr><td class="l">LSTM</td><td>chuỗi</td><td>0,744</td><td>0,712 – 0,775</td><td>106,6</td><td>70,8</td></tr>
+<tr><td class="l">GRU</td><td>chuỗi</td><td>0,742</td><td>0,710 – 0,772</td><td>107,1</td><td>70,4</td></tr>
+<tr><td class="l">ResMLP</td><td>bảng</td><td>0,733</td><td>0,684 – 0,778</td><td>108,4</td><td>69,4</td></tr>
+<tr><td class="l">FT-Transformer</td><td>bảng</td><td>0,710</td><td>0,670 – 0,745</td><td>113,1</td><td>75,7</td></tr>
+<tr><td class="l">MLP_Tapered</td><td>bảng</td><td>0,678</td><td>0,635 – 0,719</td><td>119,0</td><td>78,7</td></tr>
+<tr><td class="l">TCN</td><td>chuỗi</td><td>0,637</td><td>0,557 – 0,700</td><td>127,0</td><td>80,2</td></tr>
+<tr><td class="l">DCNv2</td><td>bảng</td><td>0,585</td><td>0,528 – 0,640</td><td>135,1</td><td>88,0</td></tr>
+<tr><td class="l">TabNet</td><td>bảng</td><td>0,577</td><td>0,344 – 0,720</td><td>136,4</td><td>78,0</td></tr>
+<tr><td class="l">ANNBasic</td><td>bảng</td><td class="bad">−0,105</td><td class="bad">−1,791 – 0,706</td><td>220,5</td><td>85,3</td></tr>
+</tbody>
+</table>
+<p class="sub">Ghi chú: LSTM/GRU/TCN chấm trên tập con dạng chuỗi (n = 6.741); các mô hình khác trên đủ 6.933 điểm.
+Khoảng tin cậy 95% từ bootstrap cụm GID, 2.000 lần lặp (giải thích ở mục 10.1).</p>
+
+<figure>
+<img src="output_figures/fig01_benchmark_r2_rmse.png" alt="So sánh R2 và RMSE các mô hình">
+<figcaption>R² và RMSE trung bình của 11 mô hình.</figcaption>
+</figure>
+
+<h3>9.2 Kết luận 1 — Cây thắng học sâu, và khoảng cách này là thật</h3>
+<p>
+LightGBM hơn LSTM 0,039 điểm R². Nghe nhỏ, nhưng kiểm định bắt cặp (mục 10.1) cho thấy khoảng cách này <b>có ý
+nghĩa thống kê</b> (khoảng tin cậy của hiệu: 0,010–0,068, không chứa 0). Kết quả khớp với các benchmark dữ liệu bảng
+quốc tế: ở cỡ vài nghìn dòng, GBDT vẫn là tốt nhất. Bài học thực hành: <b>ai muốn dùng ngay một mô hình dự đoán co ngót
+SCC thì nên dùng LightGBM</b> — nhanh hơn, chính xác hơn, ít công tinh chỉnh hơn học sâu.
+</p>
+
+<h3>9.3 Kết luận 2 — Thứ hạng nội bộ top-3 học sâu là... nhiễu</h3>
+<p>
+LSTM 0,744 vs GRU 0,742 vs ResMLP 0,733: kiểm định bắt cặp cho thấy các hiệu này đều <b>không</b> có ý nghĩa
+(ví dụ LSTM−GRU = 0,002, khoảng tin cậy −0,019 đến +0,024 — chứa 0 thoải mái). Ai đó chạy lại với phép chia khác
+hoàn toàn có thể thấy GRU đứng nhất. Báo cáo trung thực phải nói rõ điều này thay vì tuyên bố "LSTM tốt nhất".
+</p>
+
+<h3>9.4 Kết luận 3 — ANNBasic và bài học "đừng tin một con số trung bình"</h3>
+<p>
+ANNBasic có vẻ xấu (R² −0,105). Nhìn theo từng fold mới thấy chuyện thật: <b>4/5 fold đạt 0,66–0,76</b> — hoàn
+toàn tốt — nhưng <b>1 fold sập xuống −3,23</b>, kéo cả trung bình âm. Nguyên nhân: MLP trần không có chuẩn hóa
+theo lô lẫn kết nối tắt, gặp fold chứa nhóm dữ liệu (xấu) lệch xa phân phối huấn luyện thì đầu ra phát tán mất kiểm soát.
+So sánh trực tiếp: ResMLP = ANNBasic + hai kỹ thuật ổn định hóa → 0,733 và không sập fold nào. Khoảng chênh đó
+<i>chính là</i> giá trị bằng số của batch norm + skip connection. Đây cũng là lý do mọi bảng kết quả ở đây báo cáo
+cả trung vị/min/max theo fold chứ không chỉ trung bình.
+</p>
+
+<figure>
+<img src="output_figures/fig02_perfold_r2_box.png" alt="Phân bố R2 theo fold">
+<figcaption>Phân bố Test R² theo 5 fold của từng mô hình — thấy rõ fold phân kỳ của ANNBasic (−3,23) và fold thấp của TabNet (0,12).</figcaption>
+</figure>
+
+<h3>9.5 Học máy vs bốn công thức kinh nghiệm</h3>
+<table>
+<thead><tr><th class="l">Phương án</th><th>R² nguyên bản</th><th>RMSE</th><th>R² sau hiệu chỉnh k</th><th>Hệ số k</th></tr></thead>
+<tbody>
+<tr><td class="l">ACI 209R-92</td><td>0,280</td><td>178,8</td><td>0,329</td><td>0,89</td></tr>
+<tr><td class="l">B3</td><td>0,373</td><td>166,8</td><td>0,422</td><td>1,14</td></tr>
+<tr><td class="l">B4 (đầy đủ)</td><td class="bad">−1,959</td><td class="bad">362,4</td><td class="bad">−0,085</td><td>0,55</td></tr>
+<tr><td class="l">B4 (chỉ phần co khô)</td><td>0,415</td><td>161,1</td><td>0,455</td><td>1,13</td></tr>
+<tr><td class="l">fib MC2010</td><td>0,404</td><td>162,7</td><td>0,495</td><td>1,20</td></tr>
+<tr class="best"><td class="l">LSTM (DL tốt nhất, cùng tập điểm)</td><td>0,744</td><td>106,6</td><td colspan="2">—</td></tr>
+<tr class="best"><td class="l">LightGBM (tốt nhất chung)</td><td>0,783*</td><td>97,7*</td><td colspan="2">—</td></tr>
+</tbody>
+</table>
+<p class="sub">Các công thức chấm trên tập con dạng chuỗi (n = 6.741) để so cùng sân với LSTM. *LightGBM trên đủ 6.933 điểm; trên tập con 6.741 đạt 0,783/98,1.</p>
+
+<div class="why"><b>Vì sao B4 đầy đủ ra R² âm nặng?</b> Một minh họa giáo khoa về ngoại suy. Số hạng co tự sinh
+của B4 tỉ lệ với (w/c ÷ 0,38)<sup>−3,5</sup> — hiệu chỉnh trên bê tông thường có w/c quanh 0,3–0,6. Dữ liệu SCC này
+có mẫu w/c xuống tới 0,183: lũy thừa −3,5 làm số hạng đó <i>bùng nổ</i> phi thực tế → dự đoán quá cao gấp nhiều lần.
+Bỏ riêng số hạng tự sinh đi (cột "chỉ phần co khô") thì B4 lập tức thành công thức tốt nhất nhóm nguyên bản (0,415).
+Công thức có cơ sở vật lý vẫn sai lớn khi dùng ngoài miền hiệu chỉnh — đúng loại lỗi mà mô hình học từ chính dữ liệu
+SCC tránh được.</div>
+
+<!-- ===================================================== -->
+<h2 id="s10">10. Kết quả có đáng tin không? Bốn phép kiểm tra độ bền</h2>
+
+<p>Đến đây, một người đọc kỹ tính sẽ hỏi — và nên hỏi: <i>khác biệt giữa các mô hình có phải nhiễu không? đổi cách chia
+có đổi kết luận không? tăng công tinh chỉnh có cải thiện không?</i> Chúng tôi tự đặt đúng các câu hỏi đó và làm bốn phép kiểm tra để trả lời.</p>
+
+<h3>10.1 Bootstrap cụm GID — gắn "thanh sai số" cho mọi con số</h3>
+<div class="term"><b>Bootstrap.</b> Kỹ thuật thống kê trả lời "nếu thu thập lại dữ liệu tương tự, con số sẽ dao động
+cỡ nào?" mà không cần dữ liệu mới: <b>rút thăm lại có hoàn lại</b> từ chính dữ liệu đang có. Tưởng tượng 851 quả cầu
+(mỗi quả = một đường co ngót) trong một bình: rút ngẫu nhiên 851 lần <i>có trả lại</i> (quả nào đó có thể được rút 2–3
+lần, quả khác không lần nào) → được một "bộ dữ liệu giả lập"; tính lại R² trên bộ đó. Lặp 2.000 lần → 2.000 giá trị
+R², lấy khoảng chứa 95% ở giữa = <b>khoảng tin cậy 95%</b>. Chữ "cụm": rút nguyên <i>đường</i> chứ không rút từng
+<i>điểm đo</i>, vì các điểm cùng đường dính nhau — rút từng điểm sẽ cho khoảng tin cậy hẹp giả tạo.</div>
+<div class="term"><b>So sánh bắt cặp (paired).</b> Muốn so A với B, dùng <i>cùng một</i> bộ rút thăm cho cả hai rồi lấy
+hiệu R²(A) − R²(B), lặp 2.000 lần. Nếu khoảng tin cậy 95% của hiệu <b>không chứa 0</b> → khác biệt có ý nghĩa thống kê
+ở mức 5%; chứa 0 → chưa đủ bằng chứng để nói ai hơn ai.</div>
+<table>
+<thead><tr><th class="l">Cặp so sánh</th><th>Hiệu R²</th><th>Khoảng tin cậy 95% của hiệu</th><th>Kết luận</th></tr></thead>
+<tbody>
+<tr><td class="l">LightGBM − LSTM</td><td>+0,039</td><td>+0,010 … +0,068</td><td class="best">CÓ ý nghĩa</td></tr>
+<tr><td class="l">LightGBM − ResMLP</td><td>+0,050</td><td>+0,021 … +0,084</td><td class="best">CÓ ý nghĩa</td></tr>
+<tr><td class="l">LightGBM − XGBoost</td><td>+0,006</td><td>−0,004 … +0,017</td><td>không</td></tr>
+<tr><td class="l">LSTM − GRU</td><td>+0,002</td><td>−0,019 … +0,024</td><td>không</td></tr>
+<tr><td class="l">LSTM − ResMLP</td><td>+0,012</td><td>−0,034 … +0,061</td><td>không</td></tr>
+</tbody>
+</table>
+<p><b>Nói gọn:</b> "cây &gt; học sâu" là thật; "LSTM nhất nhóm học sâu" là nhiễu; "LightGBM nhất nhóm cây" cũng là nhiễu.</p>
+
+<h3>10.2 Đổi seed phép chia — kết quả không phải ăn may của một lần xáo bài</h3>
+<p>Chia lại 5 fold với hạt giống 43 và 44 (vẫn theo GID), chạy lại hai mô hình cây từ đầu:</p>
+<table>
+<thead><tr><th class="l">Mô hình</th><th>Seed 42 (chính)</th><th>Seed 43</th><th>Seed 44</th></tr></thead>
+<tbody>
+<tr><td class="l">LightGBM</td><td>0,783</td><td>0,784</td><td>0,799</td></tr>
+<tr><td class="l">XGBoost</td><td>0,777</td><td>0,778</td><td>0,792</td></tr>
+</tbody>
+</table>
+<p>Dao động ≤ 0,016 và LightGBM đứng trên XGBoost ở cả ba lần — kết quả bền với phép chia.</p>
+
+<h3>10.3 Tăng ngân sách tinh chỉnh 8 → 30 trial — kết luận không lật, còn lộ thêm một bài học</h3>
+<p>Chạy lại 3 mô hình học sâu mạnh nhất với 30 trial Optuna mỗi fold (gấp gần 4 lần công dò):</p>
+<ul class="tight">
+  <li>LSTM: 0,744 → 0,738; GRU: 0,742 → 0,741 — <b>không đổi trong phạm vi nhiễu</b>; khoảng cách với LightGBM giữ nguyên.</li>
+  <li>ResMLP: 0,733 → <b>0,653</b>. Soi từng fold: trung vị fold lại <i>tăng</i> (0,734 → 0,749) nhưng fold khó nhất sập 0,602 → 0,221. Dò càng kỹ, bộ siêu tham số thắng cuộc càng "ôm sát" tập soát — và càng kém khi gặp nhóm dữ liệu khác phân phối. Hiện tượng này gọi là <b>quá khớp lựa chọn (selection overfitting)</b>: thêm một lý do để đánh giá bằng sơ đồ chia nghiêm ngặt.</li>
+</ul>
+
+<h3>10.4 Chia theo nguồn tài liệu — phép thử khắc nghiệt nhất (đã trình bày ở mục 4)</h3>
+<p>LightGBM còn 0,541, XGBoost còn 0,533 (RMSE ≈ 142–143, các fold dao động 0,43–0,60). Không phải lỗi của riêng
+mô hình nào — đó là giới hạn của <i>bộ đặc trưng</i> khi sang phòng thí nghiệm lạ. Con số này được công bố thẳng trong
+bài báo như kỳ vọng thực tế cho người dùng ở bối cảnh đó.</p>
+
+<!-- ===================================================== -->
+<h2 id="s11">11. Mô hình "nghĩ" gì: SHAP và đồ thị phụ thuộc riêng phần</h2>
+
+<p>Một câu hỏi thường gặp tiếp theo: "mô hình dựa vào cái gì mà đoán?" Mô hình chính xác nhưng là "hộp đen" thì khó tin dùng trong kỹ thuật, nên chúng tôi dùng hai công cụ diễn giải:</p>
+
+<div class="term"><b>SHAP (SHapley Additive exPlanations).</b> Mượn ý tưởng từ lý thuyết trò chơi: xem mỗi đặc trưng là một
+"cầu thủ" cùng tạo ra dự đoán, SHAP chia điểm số cho từng cầu thủ theo đóng góp công bằng (giá trị Shapley). Kết quả:
+với <i>từng dự đoán một</i>, biết được w/cm đẩy dự đoán lên bao nhiêu, RH kéo xuống bao nhiêu... Gộp lại toàn bộ dữ
+liệu thì biết đặc trưng nào chi phối nhất.</div>
+
+<figure>
+<img src="output_figures/fig06_shap_beeswarm.png" alt="SHAP beeswarm">
+<figcaption>Mỗi chấm = một điểm dữ liệu; vị trí ngang = mức đẩy dự đoán lên/xuống; màu = giá trị đặc trưng cao/thấp.</figcaption>
+</figure>
+
+<p><b>Kết quả chính:</b> ba yếu tố chi phối là <b>thời gian khô dt</b>, <b>cường độ f<sub>cm28</sub></b> (cường độ cao →
+co ít) và <b>tỉ lệ nước w/cm</b> (nước nhiều → co nhiều); tiếp theo là RH, V/S, t₀. Chiều ảnh hưởng khớp toàn bộ với cơ
+chế vật liệu đã biết — mô hình không học ra điều gì ngược đời.</p>
+
+<div class="term"><b>PDP (partial dependence plot — đồ thị phụ thuộc riêng phần).</b> Trả lời "nếu chỉ xoay một núm,
+dự đoán đổi thế nào?": giữ mọi đặc trưng khác như dữ liệu thật, quét một đặc trưng qua dải giá trị của nó, vẽ dự đoán
+trung bình. Cho thấy <i>hình dáng</i> quan hệ (tuyến tính? bão hòa? ngưỡng?).</div>
+
+<figure>
+<img src="output_figures/fig07_pdp_main.png" alt="PDP các biến chính">
+<figcaption>PDP các biến chính — thấy rõ dạng bão hòa theo thời gian khô (nhanh đầu, chậm dần), đúng động học khuếch tán ẩm.</figcaption>
+</figure>
+
+<div class="warn box"><b>Caveat phải nhớ khi đọc SHAP ở đây:</b> vì các biến cấp phối đa cộng tuyến (mục 3.3), điểm
+đóng góp bị "chia" giữa các biến luôn đi cùng nhau (w/cm thấp ↔ cường độ cao ↔ chất kết dính nhiều). SHAP mô tả cách
+mô hình dùng đặc trưng trên dữ liệu <i>có tương quan</i>, không phải quan hệ nhân quả từng biến độc lập.</div>
+
+<!-- ===================================================== -->
+<h2 id="s12">12. Khoảng dự đoán conformal: dự đoán kèm cam kết</h2>
+
+<p>Một câu hỏi rất "kỹ sư" nữa: dự đoán lệch thì sao? Người thiết kế không chỉ cần "co khoảng 350×10⁻⁶" mà cần "co 350,
+<b>và cam kết 9/10 lần giá trị thật nằm trong 350 ± bao nhiêu</b>". Dải ± đó gọi là <b>khoảng dự đoán</b>.</p>
+
+<div class="term"><b>Dự đoán conformal (conformal prediction).</b> Cách tạo khoảng dự đoán có <b>bảo đảm toán học</b>
+mà không cần giả định phân phối: nhìn lại các <i>phần dư</i> (|dự đoán − thực|) trên dữ liệu mà mô hình chưa từng học
+(ở đây: chính các dự đoán ngoài fold), lấy phân vị 90% của chúng làm bán kính dải. Logic: "trong quá khứ, 90% số lần mô hình
+sai không quá q — vậy dải ±q sẽ phủ đúng ~90% trường hợp mới". Định lý conformal bảo đảm điều đó đúng với mẫu hữu hạn,
+miễn dữ liệu hiệu chuẩn và dữ liệu mới "cùng kiểu". Việc hiệu chuẩn tận dụng đúng cấu trúc 5 fold đã có (kiểu CV+),
+không cần huấn luyện thêm.</div>
+
+<p><b>Kiểm chứng trên dữ liệu thật</b> — cam kết 90% có được giữ không?</p>
+<table>
+<thead><tr><th class="l">Mô hình</th><th>Độ phủ thực tế (danh định 90%)</th><th>Bề rộng dải trung bình (×10⁻⁶)</th></tr></thead>
+<tbody>
+<tr class="best"><td class="l">XGBoost</td><td>90,2%</td><td>278 (±139)</td></tr>
+<tr class="best"><td class="l">LightGBM</td><td>89,9%</td><td>280</td></tr>
+<tr><td class="l">ResMLP</td><td>89,9%</td><td>313</td></tr>
+<tr><td class="l">LSTM</td><td>90,0%</td><td>319</td></tr>
+<tr><td class="l">GRU</td><td>89,9%</td><td>319</td></tr>
+</tbody>
+</table>
+<p>Độ phủ thực tế 89,4–90,2% trên cả 11 mô hình — lời hứa 90% được giữ. Mô hình dự đoán điểm càng tốt thì dải càng
+hẹp: thêm một lý do thực dụng để chọn GBDT.</p>
+
+<!-- ===================================================== -->
+<h2 id="s13">13. Kết luận</h2>
+<p>
+Nghiên cứu xây dựng một <b>khung đánh giá chống rò rỉ</b> (kiểm chứng chéo 5 fold chia theo nhóm GID) để so sánh
+công bằng 15 phương án dự đoán co ngót tổng của bê tông tự lèn — 9 mạng học sâu, 2 mô hình cây tăng cường gradient
+và 4 công thức kinh nghiệm — trên cùng 6.933 điểm đo lọc từ 438 tài liệu. Các kết luận chính:
+</p>
+<ul class="tight">
+  <li><b>Mô hình cây thắng học sâu, và khác biệt có ý nghĩa thống kê.</b> LightGBM đạt R² = 0,783 (gộp ngoài fold),
+  trên LSTM tốt nhất nhóm học sâu (0,744); kiểm định bắt cặp xác nhận khoảng cách này là thật (khoảng tin cậy của
+  hiệu không chứa 0). Với dữ liệu bảng cỡ vài nghìn dòng, GBDT là lựa chọn thực dụng nhất: chính xác hơn, nhanh
+  hơn, ít công tinh chỉnh hơn học sâu.</li>
+  <li><b>Một con số R² vô nghĩa nếu không kèm cách chia dữ liệu.</b> Cùng một mô hình cho R² 0,944 / 0,78 / 0,54
+  khi chia lần lượt theo điểm đo, theo đường co ngót (GID) và theo nguồn tài liệu. Phần lớn nghiên cứu đã công bố
+  báo cáo con số kiểu 0,9 vì chia ngẫu nhiên theo điểm — tức đang trả lời câu hỏi dễ nhất. Đây là đóng góp phương
+  pháp luận trung tâm của nghiên cứu.</li>
+  <li><b>Các công thức kinh nghiệm kém xa mô hình học từ dữ liệu.</b> ACI 209, B3, B4 và fib MC2010 chỉ đạt
+  0,28–0,42 ngay cả sau khi hiệu chỉnh hệ số; riêng B4 đầy đủ cho R² âm do số hạng co tự sinh bùng nổ ở w/c thấp
+  của SCC — một minh họa rõ về rủi ro ngoại suy ngoài miền hiệu chỉnh.</li>
+  <li><b>Kết quả bền và minh bạch về bất định.</b> Đổi seed phép chia (43, 44) gần như không đổi thứ hạng; tăng
+  ngân sách Optuna 8→30 trial không lật kết luận; khoảng dự đoán conformal giữ đúng cam kết độ phủ 90% (thực tế
+  89,4–90,2%). Thứ hạng nội bộ nhóm học sâu (LSTM vs GRU vs ResMLP) chỉ là nhiễu thống kê — báo cáo nói thẳng thay
+  vì "bán" một mô hình vô địch.</li>
+  <li><b>Mô hình học đúng cơ chế vật liệu.</b> SHAP và PDP cho thấy ba yếu tố chi phối là thời gian khô, cường độ
+  nén và tỉ lệ nước/chất kết dính, chiều ảnh hưởng khớp hiểu biết kỹ thuật; 2D-PDP cho thấy tương tác hợp lý giữa
+  thời gian và cường độ. Phân tích phần dư cho cả 11 mô hình không lộ thiên lệch hệ thống ở các mô hình mạnh
+  (LightGBM thiên lệch trung bình ≈ −12×10⁻⁶).</li>
+</ul>
+<p>
+<b>Khuyến nghị sử dụng:</b> với người cần một công cụ dự đoán co ngót SCC ngay, LightGBM kèm khoảng dự đoán
+conformal là lựa chọn nên dùng. <b>Phạm vi tin cậy:</b> dự đoán đáng tin trong miền dữ liệu đã thấy và khi phòng
+thí nghiệm đích đã có mặt trong tập huấn luyện; với một phòng hoàn toàn mới, kỳ vọng thực tế là R² ≈ 0,54 (mục 14.1).
+<b>Hướng phát triển:</b> kiểm chứng trên cơ sở dữ liệu độc lập bên ngoài, bổ sung đặc trưng mô tả đặc thù vật liệu
+và phòng thí nghiệm, và thử mô hình chuỗi có cơ chế attention.
+</p>
+
+<!-- ===================================================== -->
+<h2 id="s14">14. Hạn chế trung thực + toàn bộ file để tái lập</h2>
+<p>Phần cuối dành cho tự phản biện. Một nghiên cứu đáng tin không phải vì không có điểm yếu, mà vì nói thẳng điểm yếu của mình.</p>
+
+<h3>14.1 Những điều nghiên cứu này CHƯA làm được (nói thẳng)</h3>
+
+<p>Điểm yếu lớn nhất nằm ở câu hỏi: <b>mô hình còn dự đoán tốt đến đâu khi gặp một phòng thí nghiệm hoàn toàn mới?</b>
+Con số R² ≈ 0,54 nhắc tới trong mục 4 cần được giải thích rõ vì đây là kỳ vọng thực tế cho người dùng ở tình huống khó nhất.</p>
+
+<div class="why">
+<b>"Sang phòng thí nghiệm hoàn toàn mới" nghĩa là gì?</b> Nhớ lại nấc thang ba bậc ở mục 4. Kết quả chính
+(R² = 0,78) đo ở <b>bậc ②</b> — chia dữ liệu theo từng đường co ngót (GID): khi chấm một cấp phối lạ, mô hình
+<i>vẫn đã từng thấy</i> các đường khác của <i>chính phòng thí nghiệm đó</i>. Còn "phòng thí nghiệm hoàn toàn mới" là
+<b>bậc ③</b> (mục 10.4) — chia theo nguồn tài liệu: toàn bộ các đường của một nguồn bị giữ trọn sang tập thi, mô hình
+chỉ học từ <i>những phòng khác</i> rồi phải dự đoán cho một phòng mà nó <b>chưa từng thấy một số đo nào</b>.
+</div>
+
+<div class="warn box">
+<b>Dữ liệu khác đi ở chỗ nào, và vì sao R² rớt 0,78 → 0,54?</b> Mỗi phòng thí nghiệm dùng loại xi măng riêng, mỏ
+cốt liệu riêng (khoáng vật và độ hút nước khác nhau), buồng khí hậu và thói quen đo riêng. Những yếu tố này ảnh
+hưởng mạnh tới co ngót nhưng <b>không nằm trong 47 đặc trưng</b> (vốn chỉ ghi w/cm, cường độ, RH, thời gian khô…).
+Khi tách theo nguồn, mô hình mất "mỏ neo" là các đường cùng phòng, nên phần co ngót do đặc thù phòng quyết định
+biến thành sai số không thể đoán. Khoảng tụt <b>0,78 → 0,54 (≈ 0,24 R²)</b> chính là phần biến thiên "đặc thù phòng
+thí nghiệm" mà bộ đặc trưng hiện tại chưa mô tả được.
+</div>
+
+<div class="ok box">
+<b>Đo bằng mô hình nào?</b> Bằng chính hai mô hình mạnh nhất, chạy lại với phép chia theo nguồn
+(<code>buoc_26</code> → <code>output_kfold_src/</code>): <b>LightGBM R² ≈ 0,541, XGBoost ≈ 0,533</b>, RMSE ≈ 142–143×10⁻⁶,
+các fold dao động 0,43–0,60. Đây không phải lỗi của riêng một kiến trúc mà là <b>trần của bộ đặc trưng</b> ở kịch bản
+khắc nghiệt nhất. Hệ quả thực dụng: một phòng mới hoàn toàn chưa có dữ liệu hiệu chuẩn tại chỗ nên kỳ vọng R² ≈ 0,54;
+chỉ cần đo vài đường tại chỗ để hiệu chuẩn lại là có thể tiến gần mức 0,78.
+</div>
+
+<p>Các hạn chế còn lại:</p>
+<ul class="tight">
+  <li>Dữ liệu thứ cấp từ nhiều nguồn → không đồng nhất về quy trình đo; một phần sai số dư đến từ đây chứ không từ mô hình.</li>
+  <li>Dự đoán chỉ đáng tin trong miền dữ liệu đã thấy (w/cm 0,18–0,60, fcm 18–108 MPa...); ngoài miền là ngoại suy không bảo đảm — bài học B4 (mục 9.5) áp dụng cho chính các mô hình này.</li>
+  <li>Chưa kiểm chứng trên cơ sở dữ liệu độc lập bên ngoài; chưa thử mô hình chuỗi có attention (GRU + self-attention); mẫu thí nghiệm ≠ kết cấu thật ngoài trời.</li>
+  <li>Thứ hạng nội bộ nhóm học sâu không có ý nghĩa thống kê — đã nói rõ, không "bán" LSTM như mô hình vô địch.</li>
+</ul>
+
+<h3>14.2 Toàn bộ file mã nguồn (chạy <code>python buoc_XX_...py</code> theo thứ tự)</h3>
+<table>
+<thead><tr><th class="l">File</th><th class="l">Vai trò</th></tr></thead>
+<tbody>
+<tr><td class="l"><code>buoc_01_code_loc_data.py</code></td><td class="l">đọc dữ liệu gốc, lọc theo tiêu chí mục 3.2, xuất <code>output_data/</code></td></tr>
+<tr><td class="l"><code>buoc_02 … buoc_09, buoc_14, buoc_19</code></td><td class="l">định nghĩa từng kiến trúc (ANNBasic, MLP_Tapered, ResMLP, FT-Transformer, TabNet, GRU, LSTM, DCNv2, TCN) + không gian dò siêu tham số</td></tr>
+<tr><td class="l"><code>common_tabular.py / common_sequence_group.py</code></td><td class="l">khung dùng chung: chia fold theo nhóm, tiền xử lý trong fold, vòng huấn luyện, tính chỉ số</td></tr>
+<tr><td class="l"><code>buoc_10, buoc_12</code></td><td class="l">chạy benchmark; buoc_12 là driver kiểm chứng chéo 5 fold chính → <code>output_kfold/</code></td></tr>
+<tr><td class="l"><code>buoc_11_leakage_resmlp.py</code></td><td class="l">đo chi phí rò rỉ bậc ①→②: cùng ResMLP, chia ngẫu nhiên vs chia nhóm (0,944 vs 0,778)</td></tr>
+<tr><td class="l"><code>buoc_13, buoc_16, buoc_17, buoc_18, buoc_24</code></td><td class="l">vẽ toàn bộ hình: benchmark, learning curve, đường cong thời gian, minh họa khái niệm, sơ đồ pipeline</td></tr>
+<tr><td class="l"><code>buoc_15_shap_pdp.py</code></td><td class="l">SHAP + PDP (mục 11)</td></tr>
+<tr><td class="l"><code>buoc_20_empirical_baseline.py</code></td><td class="l">chấm ACI 209 / B3 / B4 / fib MC2010, nguyên bản và hiệu chỉnh k → <code>output_kfold/empirical_aci209/</code></td></tr>
+<tr><td class="l"><code>buoc_21_gbdt_kfold.py</code></td><td class="l">XGBoost + LightGBM trên cùng fold/tiền xử lý/ngân sách → <code>output_kfold/xgboost|lightgbm/</code></td></tr>
+<tr><td class="l"><code>buoc_22_conformal.py</code></td><td class="l">khoảng dự đoán conformal (mục 12) → <code>output_kfold/conformal/</code></td></tr>
+<tr><td class="l"><code>buoc_23_optuna_sensitivity.py</code></td><td class="l">độ nhạy 8 → 30 trial (mục 10.3) → <code>output_kfold_t30/</code></td></tr>
+<tr><td class="l"><code>buoc_25_bootstrap_ci.py</code></td><td class="l">bootstrap cụm GID: khoảng tin cậy + so sánh bắt cặp (mục 10.1) → <code>output_kfold/bootstrap/</code></td></tr>
+<tr><td class="l"><code>buoc_26_robustness_gbdt.py</code></td><td class="l">chia theo nguồn (bậc ③) + đa seed (mục 10.2, 10.4) → <code>output_kfold_src/</code>, <code>output_kfold_seed43|44/</code></td></tr>
+</tbody>
+</table>
+<p class="sub">Bản thảo bài báo: <code>ban_thao_co_ngot_DL.html</code> (cùng thư mục). Báo cáo cũ: <code>bao_cao_co_ngot_DL.html</code> (phiên bản trước khi bổ sung GBDT, công thức kinh nghiệm, conformal, bootstrap và chia theo nguồn).</p>
+
+<!-- ===================================================== -->
+<h2 id="s15">15. Bảng tra cứu thuật ngữ</h2>
+<p>Bảng cuối cùng này để tra lại nhanh các thuật ngữ đã dùng trong báo cáo — mỗi thuật ngữ một dòng.</p>
+<table>
+<thead><tr><th class="l">Thuật ngữ</th><th class="l">Giải nghĩa một dòng</th></tr></thead>
+<tbody>
+<tr><td class="l">Co ngót tổng</td><td class="l">biến dạng co theo thời gian = co khô + co tự sinh, đơn vị ×10⁻⁶ (300×10⁻⁶ = 0,3 mm trên 1 m)</td></tr>
+<tr><td class="l">SCC</td><td class="l">bê tông tự lèn — tự chảy không cần đầm, nhiều bột mịn nên co nhiều hơn bê tông thường</td></tr>
+<tr><td class="l">GID</td><td class="l">mã một đường co ngót (một mẻ đo nhiều thời điểm); đơn vị "nhóm" khi chia dữ liệu</td></tr>
+<tr><td class="l">Đặc trưng (feature)</td><td class="l">một cột đầu vào (w/cm, RH, dt...); ở đây có 47 đặc trưng</td></tr>
+<tr><td class="l">Rò rỉ dữ liệu</td><td class="l">thông tin tập thi lọt vào quá trình học → điểm đẹp giả tạo</td></tr>
+<tr><td class="l">Train / validation / test</td><td class="l">tập học / tập soát (chọn cấu hình, quyết định dừng) / tập thi (chấm đúng một lần)</td></tr>
+<tr><td class="l">K-fold CV</td><td class="l">chia 5 phần, luân phiên mỗi phần làm tập thi — mọi điểm được thi đúng một lần</td></tr>
+<tr><td class="l">Pooled OOF</td><td class="l">gộp dự đoán-khi-làm-tập-thi của cả 5 lượt rồi tính chỉ số — con số chuẩn của nghiên cứu</td></tr>
+<tr><td class="l">Seed</td><td class="l">số khởi đầu của bộ sinh ngẫu nhiên — cố định để tái lập được phép chia</td></tr>
+<tr><td class="l">R² / RMSE / MAE</td><td class="l">phần biến thiên giải thích được / sai số điển hình (phạt nặng trượt lớn) / sai số trung bình</td></tr>
+<tr><td class="l">log1p</td><td class="l">học trên log(1+y) để bớt lệch phân phối, đảo về thang gốc khi báo kết quả</td></tr>
+<tr><td class="l">Siêu tham số / trial / Optuna</td><td class="l">các "núm vặn" chọn trước / một lần thử núm / thư viện dò núm thông minh</td></tr>
+<tr><td class="l">Epoch / early stopping</td><td class="l">một lượt xem hết tập học / dừng khi tập soát ngừng cải thiện để tránh học vẹt</td></tr>
+<tr><td class="l">Quá khớp (overfitting)</td><td class="l">thuộc lòng tập học, kém trên dữ liệu mới</td></tr>
+<tr><td class="l">MLP / batch norm / skip connection</td><td class="l">mạng nhiều lớp cơ bản / chuẩn hóa giữ tín hiệu ổn định / đường vòng giúp mạng sâu dễ huấn luyện</td></tr>
+<tr><td class="l">LSTM / GRU / TCN</td><td class="l">mạng chuỗi có ô nhớ / bản gọn của LSTM / 1D CNN giãn nở cho chuỗi</td></tr>
+<tr><td class="l">Attention / Transformer</td><td class="l">cơ chế "nhìn có trọng số" giữa các phần tử / kiến trúc xây trên attention</td></tr>
+<tr><td class="l">GBDT / XGBoost / LightGBM</td><td class="l">đoàn cây quyết định nối tiếp sửa lỗi nhau / hai cài đặt mạnh nhất</td></tr>
+<tr><td class="l">Bootstrap (cụm)</td><td class="l">rút thăm lại có hoàn lại nguyên đường co ngót để ước lượng độ dao động của chỉ số</td></tr>
+<tr><td class="l">Khoảng tin cậy 95%</td><td class="l">dải chứa 95% giá trị chỉ số khi lấy mẫu lại; hiệu hai mô hình không chứa 0 → khác biệt có ý nghĩa</td></tr>
+<tr><td class="l">SHAP / PDP</td><td class="l">chia công đóng góp cho từng đặc trưng / quét một biến xem dự đoán đổi thế nào</td></tr>
+<tr><td class="l">Đa cộng tuyến</td><td class="l">các biến đầu vào tương quan mạnh với nhau → việc quy công cho từng biến phải dè dặt</td></tr>
+<tr><td class="l">Conformal</td><td class="l">khoảng dự đoán ± lấy từ phân vị phần dư quá khứ, có bảo đảm độ phủ toán học</td></tr>
+<tr><td class="l">ACI 209 / B3 / B4 / fib MC2010</td><td class="l">bốn công thức co ngót trong tiêu chuẩn Mỹ / RILEM 1995 / RILEM 2015 / châu Âu</td></tr>
+</tbody>
+</table>
+
+<p class="sub" style="margin-top:36px">Báo cáo soạn ngày 12/06/2026 từ kết quả trong <code>output_kfold/</code>,
+<code>output_kfold_t30/</code>, <code>output_kfold_src/</code>, <code>output_kfold_seed43|44/</code>. Mọi con số đối
+chiếu được với file CSV tương ứng.</p>
+
+</body>
+</html>
