@@ -1,0 +1,48 @@
+name: Build teacher-check filtered data
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-filtered-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install data dependencies
+        run: pip install numpy==2.2.1 pandas==2.2.3 openpyxl==3.1.5
+
+      - name: Build canonical filtered point dataset
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import sys
+          from pathlib import Path
+
+          source = Path('11_empirical_formula.py')
+          spec = importlib.util.spec_from_file_location('empirical_module', source)
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+
+          outputs = module.build_datasets(
+              xlsx_path=Path('data_raw/Database SCC.xlsx'),
+              output_dir=Path('teacher_check_data'),
+              cfg=module.DataPipelineConfig(),
+          )
+          print('Filtered point dataset:', outputs['point'])
+          PY
+
+      - name: Upload filtered CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: teacher-check-filtered-data
+          path: teacher_check_data/data_train_total_ready.csv
+          if-no-files-found: error
