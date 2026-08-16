@@ -1,0 +1,440 @@
+"""Merged file - 05_tabnet.py
+original: buoc_06_tabnet.py, plus the shared pipeline common_tabular.py,
+  2. Define the model architecture + Optuna hyperparameter search space - from buoc_06_tabnet.py.
+written to the hidden _cache/tabnet/ directory so downstream summary files (12, 13) can
+Run: python 05_tabnet.py
+    te = regression_metrics(y_test_raw, pred_test_raw)
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+# PART 3/4 - MODEL ARCHITECTURE + SEARCH SPACE (merged from buoc_06_tabnet.py)
+Step 06 - TabNet model (Tabular Attention Network)
+Full name: TabNet - Attentive Interpretable Tabular Learning
+Original authors: Sercan Arik & Tomas Pfister (Google Cloud AI, 2019)
+This file reimplements the TabNet architecture entirely in pure PyTorch,
+with NO need to install the external pytorch_tabnet library. The goal is for readers
+to be able to understand every internal detail of the model.
+OVERALL ARCHITECTURE (end-to-end data processing pipeline):
+  Input: tensor (batch_size, n_features)
+  [1] Input BatchNorm1d
+      - Normalizes all features onto the same scale
+      - Helps the model converge faster and more stably during training
+      - Each feature has its mean subtracted and is divided by its standard deviation
+  [2] Loop over N sequential steps, each step consisting of 3 parts:
+      |   (a) Attention Mask - self-selecting feature mechanism:
+      |       - Receives attention information from the previous step (prev_attention)
+      |       - Passes through a Fully Connected (FC) layer then BatchNorm
+      |       - Multiplies by prior_scales (a memory recording which features have been
+      |         chosen in previous steps) to encourage the model to choose
+      |         NEW features instead of repeating old ones
+      |       - Applies softmax to get probabilities (sum = 1), indicating
+      |         how important each feature is (in percent) at this step
+      |       - Multiplies the attention mask with the original features (element-wise)
+      |       - Result: only keeps (or emphasizes) the features
+      |         that the model considers most important at the current step
+      |       - Unimportant features are pushed close to 0
+      |   (c) Feature Transform - feature extraction:
+      |       - Passes masked features through 2 consecutive GLU (Gated Linear Unit)
+      |         layers: a shared layer and a step-specific layer
+      |       - The output is split into 2 parts:
+      |           * the first n_d dimensions: through ReLU, used for the final prediction
+      |           * the remaining n_a dimensions: used as attention for the next step
+      |       - Updates prior_scales: reduces the weight of the chosen feature
+      |         via the formula prior_new = prior_old * (1 - mask)
+      |   => Each step's output (n_d dimensions) is ACCUMULATED into the
+      |      aggregated variable, similar to a residual connection in ResNet
+      - Randomly disables a fraction of neurons during training
+      - Helps prevent overfitting (the model memorizing the training data)
+  [4] Fully Connected head (final layer)
+      - Transforms the aggregated vector (n_d dimensions) into 1 predicted value
+      - Output: tensor (batch_size, 1) - the regression value for each sample
+  Output: tensor (batch_size, 1) - predicted value
+EXPLANATION OF THE ATTENTION MECHANISM (SEQUENTIAL ATTENTION):
+Attention in TabNet differs from Transformer:
+- Transformer attention: each element "looks at" ALL other elements
+  in the sequence, used for ordered data (text, images).
+- TabNet attention: the model selects WHICH COLUMN (feature) is most important
+  at EACH processing step, used for tabular data.
+Sequential attention process:
+  Step 1: prior_scales = [1, 1, 1, ..., 1] (all features are available)
+          -> The attention mask selects, e.g., feature 3 and 7 as most important
+          -> prior_scales decreases at positions 3 and 7
+  Step 2: prior_scales = [1, 1, 0.2, 1, 1, 1, 1, 0.3, ...]
+          -> Feature 3 and 7 have little chance of being selected again
+          -> The model is forced to explore other features (e.g. feature 1 and 5)
+  Step 3: continues similarly...
+Thanks to this mechanism, each step "looks at" a DIFFERENT SET OF FEATURES, helping the model
+exploit diverse information from the data instead of focusing on only a few features.
+EXPLANATION OF GATED LINEAR UNIT (GLU):
+GLU is a non-linear transformation technique:
+  - Input: vector x with size in_dim
+  - Passes through an FC layer to produce vector h with size 2 * out_dim
+  - Splits h into 2 equal halves:
+      * Left half (value): contains the information to keep
+      * Right half (gate): through sigmoid -> value from 0 to 1
+      * Gate near 1: information is kept as-is (gate "open")
+      * Gate near 0: information is blocked (gate "closed")
+Benefits of GLU over plain ReLU:
+  - The model AUTOMATICALLY LEARNS how to filter information (which gate opens, which closes)
+  - The gradient does not "die" like ReLU does for negative values
+  - Usually gives better results on tabular data
+WHY TABNET SELF-SELECTS FEATURES (INTERPRETABILITY):
+In traditional models (e.g. Random Forest), we need an external
+technique (permutation importance, SHAP) to know which feature is important.
+TabNet has this mechanism BUILT IN via the attention mask:
+  - Each step produces a mask (probability vector, sum = 1)
+  - The mask directly shows: "at this step, feature X accounts for 40%, feature Y
+    accounts for 25%, ..." -> We can visualize and explain the model
+  - Aggregating the mask across all steps -> overall feature importance
+  - This is called "interpretable by design"
+COMPARISON WITH MLP (Multi-Layer Perceptron) AND TRANSFORMER:
+MLP (regular Fully Connected):
+  - Uses ALL features at once in every layer, no selection
+  - Has no built-in explanation mechanism (feature importance)
+  - Simple, fast, but may miss complex relationships
+  - Prone to overfitting when there are many irrelevant (noisy) features
+  - Attention between ELEMENTS in a sequence, not between
+    column-wise features
+  - Very powerful for ordered data (NLP, vision), but for
+    tabular data it is not necessarily superior to TabNet or tree-based models
+  - Requires more data to train effectively
+  - Selects features STEP BY STEP (sparse attention), only "looking" at
+    a few of the most important features each time
+  - Has built-in interpretability (attention mask)
+  - Effective on small-to-large tabular data
+  - Can compete with XGBoost/LightGBM on many problems
+HOW TO TUNE (HYPERPARAMETER TUNING):
+The most important TabNet hyperparameters:
+  - n_d (decision dimension): size of the prediction vector at each step
+      * Larger -> the model has more "memory", more powerful
+      * But too large -> prone to overfitting, slower
+      * Usually between 8 and 64
+  - n_a (attention dimension): size of the attention vector at each step
+      * Usually set equal to n_d (as recommended by the original paper)
+  - n_steps: number of sequential processing steps
+      * More steps -> the model "looks at" more feature groups
+      * But too many steps -> slower, prone to overfitting
+      * Usually 3 to 7 steps
+  - learning_rate: learning speed, affects convergence speed
+  - weight_decay: L2 penalty coefficient, helps regularization
+  - dropout: fraction of neurons randomly disabled during training
+In this file, Optuna (the hyperparameter optimization library) will automatically try
+many different combinations and select the best parameter set based on the results
+on the validation set.
+ADVANTAGES AND DISADVANTAGES:
+Advantages:
+  + Automatically selects important features (built-in feature selection)
+  + Good interpretability via the attention mask
+  + Handles tabular data with many features well
+  + No need for complex manual feature engineering
+  + Can compete with gradient boosting (XGBoost, LightGBM)
+Disadvantages:
+  - Significantly slower than XGBoost/LightGBM to train
+  - Requires more data than tree-based models to achieve good performance
+  - Sensitive to hyperparameter choice (needs careful tuning)
+  - More complex architecture than a simple MLP
+  - With small datasets (< a few thousand samples), may lose to tree-based models
+HOW TO RUN:
+Run standalone (TabNet-only benchmark):
+Run together with all other models:
+# TABNET ARCHITECTURE (IMPLEMENTED IN PURE PYTORCH)
+# Consists of 3 main classes:
+#   1. GLUBlock    - Gated Linear Unit block (gated non-linear transformation)
+#   2. TabNetStep  - One TabNet processing step (attention + feature transform)
+#   3. SimpleTabNet - Complete TabNet model (combines N steps + prediction head)
+    GLUBlock - Gated Linear Unit block.
+    This is the most basic component in TabNet's Feature Transform part.
+    GLU lets the model AUTOMATICALLY LEARN how to filter information: each dimension
+    of the output has a "gate" that decides how much information
+    passes through (value from 0 = fully blocked, to 1 = fully passed).
+    Detailed operating principle:
+        1. Input x has size (batch_size, in_dim)
+        2. Through an FC (Fully Connected) layer, producing a tensor of size (batch_size, 2 * out_dim)
+        3. Through BatchNorm for normalization
+        4. Splits the tensor into 2 parts, each of size (batch_size, out_dim):
+           - Left half = "value" (the actual information to pass on)
+           - Right half = "gate" (control gate), passed through the sigmoid function
+           - Where the gate is near 1 (sigmoid > 0.5): information is kept
+           - Where the gate is near 0 (sigmoid < 0.5): information is blocked
+        in_dim  (int): Number of input dimensions. Example: 64 (from masked features or a previous layer)
+        out_dim (int): Desired number of output dimensions. Example: 48 (= n_d + n_a)
+    Tensor size through each step (forward pass):
+        After FC (self.fc):       (batch_size, 2 * out_dim)  -- FC outputs double size to be split
+        After BatchNorm (self.bn):(batch_size, 2 * out_dim)  -- normalized, shape unchanged
+        After chunk (value):      (batch_size, out_dim)       -- first half
+        After chunk (gate):       (batch_size, out_dim)       -- remaining half
+        Output (value * sigma(gate)): (batch_size, out_dim)     -- element-wise multiply
+        # Fully Connected layer: transforms from in_dim dimensions to 2*out_dim dimensions.
+        # Reason for 2*out_dim: we need to split the output into 2 equal parts (value and gate),
+        # each of size out_dim. If we only output out_dim, then after splitting, each part
+        # would only have out_dim/2 dimensions, which is too small.
+        # BatchNorm1d: normalizes the output per batch (mean = 0, variance = 1).
+        # Helps stabilize the gradient during backpropagation,
+        # avoiding exploding or vanishing gradients.
+        Forward pass through the GLU block.
+        Parameters:
+            x (Tensor): Input tensor, size (batch_size, in_dim).
+                         Each row is one data sample, each column is one feature dimension.
+        Returns:
+            Tensor of size (batch_size, out_dim): the result after filtering through the gate.
+                   Keeps only the information the model considers important.
+        # Step 1: Pass the input through FC then BatchNorm
+        # FC applies a linear transform: h = x @ W^T + b, size (batch, 2*out_dim)
+        # BatchNorm normalizes h along the batch dimension (dim 0)
+        # Step 2: Split tensor h into 2 equal parts along the last dimension (dim=-1)
+        # chunk(2, dim=-1) cuts the tensor into 2 pieces along the feature dimension:
+        #   - value: (batch, out_dim) - contains the original information to pass on
+        #   - gate:  (batch, out_dim) - control gate, will go through sigmoid
+        # Step 3: Apply the gating mechanism
+        # sigmoid(gate): squashes the gate value into the range [0, 1]
+        #   - Value near 1: "gate open", information in value is kept unchanged
+        #   - Value near 0: "gate closed", information in value is suppressed
+        # Element-wise multiplication (*): each value element multiplied by its corresponding gate
+    TabNetStep - One step in TabNet's sequential processing chain.
+    Each step performs 3 main tasks:
+        1. Compute the Attention Mask: determine which feature is most important at this step
+        2. Apply the mask to the original features: keep only the selected information
+        3. Feature Transform: extract features through 2 consecutive GLU layers
+    Detailed operating mechanism:
+        - Receives prev_attention (attention output from the previous step) and prior_scales
+          (memory tracking which features have been chosen in previous steps)
+        - Computes a new attention mask via: FC -> BN -> multiply by prior_scales -> softmax
+        - prior_scales helps the model AVOID re-selecting an already-chosen feature:
+            * Feature chosen many times -> prior decreases -> softmax gives it low probability
+            * Feature not yet chosen -> prior stays high -> has a chance to be chosen
+        - Masked features = mask * original features (element-wise multiply)
+        - Through 2 GLU layers: shared (parameters shared across steps if needed)
+          and step (specific to each step)
+        - Output split into: n_d dimensions for prediction + n_a dimensions for the next step's attention
+        in_dim (int): Number of input features (= number of columns in the raw data).
+                      Example: 50 if the data has 50 features.
+        n_d    (int): Number of dimensions for decision (prediction). Larger = more powerful model
+                      but also more prone to overfitting. Usually 8 to 64.
+        n_a    (int): Number of dimensions for attention. Determines the model's ability to
+                      carry attention information between steps. Usually set = n_d.
+            x              : (batch_size, in_dim)   - features already BatchNorm-ed
+            prior_scales   : (batch_size, in_dim)   - prior for attention
+            prev_attention : (batch_size, n_a)       - attention output from the previous step
+        Internal processing:
+            softmax(mask)  : (batch_size, in_dim)   - probability of selecting each feature
+            masked_features: (batch_size, in_dim)   - filtered features
+            step_output    : (batch_size, n_d)       - features for prediction
+            new_attention  : (batch_size, n_a)        - attention for the next step
+            new_prior      : (batch_size, in_dim)     - updated prior
+        # Save n_d for use when splitting the output in forward()
+        # n_d = output dimension for prediction (decision dimension)
+        # n_a = output dimension for the next step's attention (attention dimension)
+        # --- Attention part ---
+        # FC layer: transforms the attention vector (n_a dimensions) into a vector with in_dim dimensions
+        # to produce a mask with the SAME NUMBER OF DIMENSIONS as the input features.
+        # This is necessary because the mask will be multiplied element-wise with the features (in_dim dimensions).
+        # BatchNorm for attention: normalizes to stabilize training
+        # --- Feature Transform part ---
+        # First GLU layer (shared): receives masked features (in_dim dimensions)
+        # and transforms them into a (n_d + n_a)-dimensional vector.
+        # Called "shared" because in the original paper, this layer CAN SHARE parameters
+        # across different steps (here each step has its own copy for simplicity).
+        # Second GLU layer (step-specific): receives the shared layer's output
+        # and continues extracting features. This layer is UNIQUE to each step,
+        # allowing each step to have a different transformation.
+        # Save n_d to know where to cut the output (first n_d dimensions for prediction,
+        # the rest for attention)
+        Forward pass through one TabNet step.
+            x (Tensor):              Features already normalized by the input BatchNorm.
+                                     Size (batch_size, in_dim).
+                                     These are the ORIGINAL features, unchanged across steps.
+                                     Every step receives the same x but selects different features.
+            prior_scales (Tensor):   Memory tracking which features have been chosen.
+                                     Initially all = 1.0 (no feature chosen yet).
+                                     After each step, the chosen positions are decreased.
+                                     Example: [1.0, 0.3, 1.0, 0.1, ...] means feature 1
+                                     and feature 3 have been chosen a lot (small values).
+            prev_attention (Tensor): Attention output from the previous step (or a zero vector if
+                                     this is the first step). Size (batch_size, n_a).
+                                     Contains information the model learned in the previous step,
+                                     used to decide which feature this step should select.
+        Returns (a tuple of 3 tensors):
+            step_output (Tensor):    Features used for the final prediction.
+                                     Size (batch_size, n_d).
+                                     Will be accumulated into the aggregated variable.
+            new_attention (Tensor):  Attention information for the next step.
+                                     Size (batch_size, n_a).
+                                     Carries "knowledge" forward to the next step.
+            new_prior (Tensor):      Updated prior scales.
+                                     The feature just chosen will have a lower prior.
+        # STEP 1: Compute the Attention Mask - decide which feature is most important
+        # Pass prev_attention (n_a dimensions) through FC to get an in_dim-dimensional vector,
+        # then through BatchNorm for normalization. The result attn_logits is a "raw score"
+        # for each feature, not yet a probability.
+        # Element-wise multiply with prior_scales: a feature chosen a lot in previous
+        # steps will have a small prior -> its score decreases -> less chance of being chosen again.
+        # This is the "entropy-based sparsity" mechanism that encourages the model to explore
+        # new features instead of repeating old ones.
+        # Softmax turns the raw scores into probabilities (summing to 1 along the feature dimension).
+        # The mask shows the percentage of "attention" the model gives to each feature.
+        # Example: mask = [0.01, 0.40, 0.05, 0.30, ...] means feature 1 accounts for
+        # 40% of attention, feature 3 accounts for 30%, other features less.
+        # STEP 2: Apply the mask to the original features - filter important information
+        # Element-wise multiply: masked_features = mask * x
+        # Features with a high mask (near 1) keep their value unchanged -> "important"
+        # Features with a low mask (near 0) are suppressed close to 0 -> "not important"
+        # Result: the model only "looks at" the few features selected at this step
+        # STEP 3: Feature Transform - extract features through 2 GLU layers
+        # Shared GLU layer: transforms masked_features from in_dim dimensions
+        # into (n_d + n_a) dimensions. GLU automatically learns how to filter information via its gate.
+        # Step-specific GLU layer: continues refining the features.
+        # Two consecutive GLU layers increase the model's expressiveness,
+        # similar to stacking multiple layers in an MLP.
+        # STEP 4: Split the output and update the prior
+        # Split tensor h (n_d + n_a dimensions) into 2 parts:
+        # - the first n_d dimensions: through ReLU -> used for the final prediction
+        #   ReLU(x) = max(0, x): keeps positive values, sets negative values to 0
+        # - the remaining n_a dimensions: used as attention input for the next step
+        #   Not passed through ReLU because attention needs negative values too (negative -> less important)
+        # Update prior_scales: reduce the weight of the feature just chosen
+        # Formula: new_prior = prior_old * (1 - mask)
+        #   - Feature chosen (mask near 1): (1 - mask) near 0 -> prior decreases sharply
+        #   - Feature not chosen (mask near 0): (1 - mask) near 1 -> prior stays unchanged
+        # Cumulative effect: a feature chosen repeatedly will have an increasingly small prior,
+        # forcing the model to "look" at other features in later steps.
+    SimpleTabNet - Complete TabNet model, written in pure PyTorch.
+    This is the main class that combines all components into an end-to-end model
+    (from input to output prediction). Processing pipeline:
+        Input BatchNorm  --  normalizes all features
+        Initialize: prior_scales = 1 (no feature chosen yet)
+                   prev_attention = 0 (no prior attention)
+                   aggregated = 0 (no output accumulated yet)
+        Loop over N steps:
+           |  Each step: attention mask -> masked features -> 2 GLU layers
+           |  -> step_output (n_d dimensions) is ADDED to aggregated
+           |  -> updates prev_attention and prior_scales for the next step
+        Dropout  --  randomly disables neurons to fight overfitting
+        FC head (n_d -> 1)  --  produces 1 predicted value
+        in_dim  (int):   Number of input features (= number of data columns after preprocessing).
+                         Example: 50 if the data has 50 features.
+        n_d     (int):   Decision (prediction) dimension per step. Determines the "memory"
+                         of the model at each step. Larger = more powerful but slower.
+                         Commonly used range: 8 - 64.
+        n_a     (int):   Attention dimension per step. Determines the ability to carry
+                         attention information between steps. The original paper recommends n_a = n_d.
+        n_steps (int):   Number of sequential processing steps. Each step "looks at" a
+                         different group of features. More steps -> exploits more features but slower.
+                         Commonly used range: 3 - 7.
+        dropout (float): Fraction of neurons randomly disabled during training (0.0 to 1.0).
+                         Helps prevent overfitting. Example: 0.1 means 10% of neurons disabled.
+                         Commonly used range: 0.0 - 0.3.
+        After input_bn:      (batch_size, in_dim)    - normalized
+        prior_scales:      (batch_size, in_dim)    - initialized to all 1
+        prev_attention:    (batch_size, n_a)         - initialized to all 0
+        aggregated:        (batch_size, n_d)         - initialized to all 0
+        After each step:     aggregated += step_output  (batch_size, n_d)
+        After dropout:       (batch_size, n_d)         - some values set to 0
+        After head (FC):     (batch_size, 1)           - final predicted value
+        # Save the parameters for use in forward()
+        self.in_dim = in_dim      # Number of input features
+        self.n_a = n_a            # Attention dimension (needed when initializing prev_attention)
+        self.n_steps = n_steps    # Number of processing steps (to know how many times the loop runs)
+        # Input BatchNorm: normalizes ALL features onto the same scale.
+        # Very important because features may have different units:
+        # e.g. age (0-100) vs income (0-1000000). Without normalization,
+        # features with large values would "dominate" features with small values.
+        # Create a list of N processing steps (TabNetStep).
+        # nn.ModuleList behaves like a Python list but PyTorch tracks the parameters
+        # of all modules inside it (needed for the optimizer and GPU).
+        # Each step has its OWN set of parameters (attention FC, 2 GLU layers), allowing
+        # each step to learn to select features and transform them differently.
+        # Dropout: during training, randomly disables a fraction of neurons.
+        # Purpose: forces the model not to depend too heavily on any single neuron,
+        # helping it generalize better to unseen data.
+        # In eval mode, dropout is automatically disabled, all neurons are used.
+        # Final FC layer (head): transforms the accumulated vector (n_d dimensions)
+        # into 1 predicted value. This is the regression head.
+        # n_d -> 1: each sample produces exactly 1 predicted number.
+        Forward pass through the entire TabNet model.
+            x (Tensor): Input data, size (batch_size, in_dim).
+                         Each row is one data sample (data point).
+                         Each column is one feature.
+                         Example: batch_size=32 samples, in_dim=50 features.
+            Tensor of size (batch_size, 1): the regression prediction for each sample.
+                   Example: predicted house price, revenue, etc.
+        # Step 1: Normalize all input features with BatchNorm.
+        # After this step, each feature has mean near 0 and variance near 1.
+        # Step 2: Initialize the state variables for the loop over N steps.
+        # prior_scales: memory tracking which features have been chosen.
+        # Initialized to all 1 means: "all features are available to be chosen".
+        # Size: (batch_size, in_dim) - each sample has its own prior set.
+        # prev_attention: attention output from the previous step (first step = zero vector).
+        # Initialized to all 0 means: "no attention information yet from before".
+        # Size: (batch_size, n_a).
+        # aggregated: variable accumulating the prediction output from all steps.
+        # After each step, step_output (n_d dimensions) is ADDED here.
+        # Similar to a residual connection: information from every step contributes
+        # to the final prediction, helping the gradient propagate better.
+        # Size: (batch_size, n_d).
+        # Step 3: Loop over N sequential steps.
+        # Each step receives the SAME original features x (already BatchNorm-ed) but selects different features
+        # via the attention mask + prior_scales mechanism.
+            # Call TabNetStep's forward():
+            #   - step_out: (batch, n_d) - prediction features from this step
+            #   - prev_attention: (batch, n_a) - attention for the next step (updated)
+            #   - prior_scales: (batch, in_dim) - updated prior (chosen features decreased)
+            # Accumulate: each step contributes additional information to the prediction vector.
+            # After N steps, aggregated contains the combined features from all steps.
+        # Step 4: Apply dropout to the accumulated vector.
+        # Randomly disables some neurons (only during training, no effect during eval).
+        # Step 5: Pass through the final FC layer (head) to get 1 predicted value.
+        # head: Linear(n_d, 1) -> output size (batch_size, 1)
+# HYPERPARAMETER SEARCH SPACE
+# This function defines the RANGE of values that Optuna will try for each hyperparameter.
+# Optuna uses a Bayesian optimization algorithm (specifically TPE - Tree-structured
+# Parzen Estimator) to intelligently choose the next combination based on the
+# results of previous trials, instead of trying randomly (random search).
+    Defines the hyperparameter search space for Optuna.
+    Optuna calls this function EVERY TIME it tries a new parameter combination (each "trial").
+    The function returns a dictionary containing the chosen values, which Optuna will use
+    validation results to judge whether this combination is good or bad.
+        trial (optuna.Trial): Optuna's trial object, providing suggest_* methods
+                               to sample values from a given range.
+        dict[str, Any]: Dictionary containing the 5 chosen hyperparameters:
+            - "lr":      learning rate
+            - "wd":      weight decay (L2 penalty coefficient)
+            - "dropout": dropout rate
+            - "n_d":     decision (prediction) dimension
+            - "n_steps": number of processing steps
+        # Learning rate: determines how large or small each parameter update step is.
+        # log=True: sample on a logarithmic scale (5e-4, 1e-3, 5e-3 all have equal chance).
+        # Reason for using log: learning rate varies by order of magnitude (1e-4 vs 1e-3 differ a lot).
+        # Too small -> learns too slowly, too large -> the model oscillates without converging.
+        # Weight decay (L2 penalty): adds a penalty term to the loss based on parameter magnitude.
+        # Helps regularization: prevents parameters from growing too large -> reduces overfitting.
+        # Small value (1e-6): almost no penalty. Large value (3e-4): stronger penalty.
+        # Dropout: fraction of neurons randomly disabled on each forward pass (during training).
+        # 0.05 = 5% of neurons disabled, 0.30 = 30% of neurons disabled.
+        # Higher dropout -> stronger regularization, but too high -> the model becomes too weak.
+        # n_d (decision dimension): size of the prediction vector at each step.
+        # Chosen from the fixed list [16, 24, 32, 48] instead of a continuous range.
+        # n_a (attention dimension) will be set = n_d in build_model().
+        # Small value (16): lightweight, fast model, less overfitting.
+        # Large value (48): more powerful model but slower, more prone to overfitting.
+        # n_steps: number of sequential processing steps.
+        # Each step selects a different group of features via the attention mask.
+        # 3 steps: the model looks at 3 feature groups -> simple, fast.
+        # 6 steps: the model looks at 6 feature groups -> more complex, slower.
+    Builds a SimpleTabNet model from the given hyperparameter set.
+    This function is called by the benchmark pipeline (in common_tabular.py) after
+    Optuna has chosen a hyperparameter combination. The function receives in_dim (the
+    number of features in the data) and params (hyperparameter dictionary), then returns a
+    PyTorch model ready for training.
+        in_dim (int):             Number of input features. Automatically determined
+                                  from the data by the benchmark pipeline.
+        params (dict[str, Any]):  Hyperparameter dictionary from search_space().
+                                  Contains: "n_d", "n_steps", "dropout" (and "lr", "wd"
+                                  used by the optimizer, not used here).
+        nn.Module: The initialized SimpleTabNet model, ready for training.
+        n_d=int(params["n_d"]),          # Decision dimension: taken from the Optuna parameter
+        n_a=int(params["n_d"]),          # Attention dimension = n_d (as recommended by the original paper)
+        n_steps=int(params["n_steps"]),  # Number of sequential processing steps
+        dropout=float(params["dropout"]),  # Dropout rate
+# BENCHMARK RUNNER AND ENTRY POINT
+# This part connects the TabNet model to the shared benchmark pipeline (common_tabular.py).
+# The shared pipeline handles: reading data, splitting train/val/test, hyperparameter optimization
+# with Optuna, training the best model, evaluation, and saving results.

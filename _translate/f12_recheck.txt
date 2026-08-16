@@ -1,0 +1,6 @@
+    y, yh, fold = oof["y_true"].to_numpy(), oof["y_pred"].to_numpy(), oof["Fold"].to_numpy()
+    abs_res = np.abs(y - yh)
+            lo = np.full(len(y), np.nan)
+            hi = np.full(len(y), np.nan)
+            covered = (y >= lo) & (y <= hi)
+                "N": int(len(y)),

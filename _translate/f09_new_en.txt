@@ -1,0 +1,67 @@
+"""Merged file - 09_tcn.py
+original: buoc_14_tcn.py, plus the shared pipeline common_sequence_group.py,
+  2. Model architecture definition + Optuna hyperparameter search space - from buoc_14_tcn.py.
+written to the hidden _cache/tcn/ directory so downstream summary files (12, 13) can
+Run: python 09_tcn.py
+# PART 3/4 - MODEL ARCHITECTURE + SEARCH SPACE (merged from buoc_14_tcn.py)
+"""Step 14 - TCN (Temporal Convolutional Network) model - 1D CNN for shrinkage sequences.
+WHAT IS TCN?
+TCN (Temporal Convolutional Network) is a 1D CNN architecture
+for sequence data, proposed by Bai, Kolter & Koltun (2018).
+Instead of processing step-by-step sequentially like RNNs (GRU/LSTM), TCN uses 1D CONVOLUTION
+sliding along the time axis. This is a REPRESENTATIVE DL family quite different from RNNs, adding
+to the GRU/LSTM comparison in the paper.
+Three core components:
+1) CAUSAL CONVOLUTION:
+   - The output at time t depends ONLY on the input at t and steps BEFORE t
+     (no "peeking" at the future). Implemented by padding on the LEFT then
+     trimming the excess on the right (Chomp). Suited to forecasting shrinkage over time.
+2) DILATED CONVOLUTION:
+   - The dilation factor increases exponentially across layers: 1, 2, 4, 8...
+   - This lets the receptive field grow EXPONENTIALLY with the number of layers,
+     letting it "see far" into the past without needing too many layers -> capturing the
+     long-term trend of the shrinkage curve.
+3) RESIDUAL BLOCK:
+   - Each block = [dilated Conv -> normalization -> ReLU -> Dropout] x2, plus a skip
+     connection. The skip connection helps stabilize deep training (preventing
+     vanishing gradients) - exactly what ANNBasic LACKS, which is why it can blow up on OOD data.
+WHY weight_norm INSTEAD OF BatchNorm?
+Sequences are padded at the END to form a batch. BatchNorm computes statistics over the whole batch and
+time axis -> padding positions (value 0) would distort the statistics. weight_norm
+normalizes the WEIGHTS (independent of data/padding), so it is more stable with padded
+sequences + masking. This is the standard choice in the original TCN paper.
+PREVENTING OVERFITTING (lessons learned from TCN overfitting previously)
+Shrinkage sequence data has few GID groups -> TCN easily overfits. So the search space keeps:
+  - Few channels (16-40), moderate dilation (2-4 layers).
+  - High dropout floor (0.1-0.4), strong weight decay (up to 3e-3).
+If it still overfits on k-fold -> report it honestly, as with ANNBasic/TabNet.
+Run standalone:  python buoc_14_tcn.py
+from torch.nn.utils import weight_norm  # TCN uses weight_norm instead of BatchNorm (sequences have padding)
+# TCN architecture
+    """Trim the last `chomp_size` elements along the time axis.
+    After padding (k-1)*dilation on the left to preserve causality, the Conv1d output length
+    is (k-1)*dilation elements longer than the input at the end. Chomp trims this excess
+    so the output has the same length as the input AND does not use future information.
+        # x: (batch, channels, time). Trim chomp_size elements off the end if present.
+    """A TCN residual block: [dilated Conv -> Chomp -> ReLU -> Dropout] x2 + skip."""
+        pad = (kernel_size - 1) * dilation  # left padding to preserve causality
+        # Skip connection: if the number of input channels != output channels, use a 1x1 conv to match dimensions.
+    """TCN seq2seq: predicts shrinkage at EVERY time step.
+        input_dim   (int):   number of input features per step.
+        num_channels(int):   number of hidden channels per convolutional layer.
+        levels      (int):   number of TemporalBlocks (dilation = 1,2,4,... by layer).
+        kernel_size (int):   convolution window size.
+        dropout     (float): dropout rate within each block.
+            dilation = 2 ** i  # dilation increases exponentially
+        # FC head: maps num_channels -> 1 at every time step (using a 1x1 Conv1d).
+        # x: (batch, seq_len, input_dim) -> (batch, input_dim, seq_len) for Conv1d
+        y = self.tcn(x)          # (batch, num_channels, seq_len)
+        y = self.head(y)         # (batch, 1, seq_len)
+        return y.squeeze(1)      # (batch, seq_len)
+    """Build a TCNRegressor from the hyperparameters proposed by Optuna."""
+    """Search space for TCN - regularize strongly to prevent overfitting on sequences with few groups."""
+        # few channels to limit capacity (prevent overfitting)
+        # number of layers -> receptive field grows exponentially
+        # convolution window
+        # high dropout floor
+        # STRONG weight decay (log) to keep weights small, stable on OOD test data

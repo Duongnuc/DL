@@ -1,0 +1,66 @@
+"""File gop - 12_tong_hop_so_sanh.py
+File nay GOP LAI (khong bo sot) noi dung tu 3 file goc trong pipeline nghien
+cuu goc: buoc_12_kfold_driver.py (phan gom bang so sanh - KHONG phan chay
+k-fold, vi tung mo hinh da tu chay k-fold trong file rieng cua no 01-10),
+buoc_22_conformal.py (khoang du doan conformal tu residual ngoai fold) va
+buoc_25_bootstrap_ci.py (bootstrap CI theo cum GID + so sanh cap co y nghia
+Khac voi cac file 01-11 (tu chuan bi du lieu + tu huan luyen), file nay CHI
+DOC LAI ket qua da luu trong thu muc an _cache/<model>/kfold/ cua cac file
+01-10 (va _cache/empirical/ cua file 11) - KHONG huan luyen lai gi ca. Vi vay
+PHAI CHAY CAC FILE 01-11 TRUOC (it nhat vai file de co du lieu so sanh), roi
+moi chay file nay.
+  1. Gom bang so sanh Group K-Fold cua tat ca mo hinh (R2/RMSE/MAE trung
+     binh +/- do lech chuan qua 5 fold), doi chieu voi cong thuc kinh nghiem.
+  2. Tinh khoang du doan conformal (split-conformal, leave-fold-out) cho tung
+     mo hinh co it nhat 2 fold - tra loi cau hoi "sai so co the lon den dau".
+  3. Bootstrap 2000 lan theo cum GID de co khoang tin cay 95% cho R2/RMSE, va
+     so sanh cap (paired) giua cac mo hinh de biet chenh lech co y nghia
+     thong ke khong.
+Ket qua CSV trung gian ghi vao _cache/tong_hop/ (00_kfold_comparison.csv,
+Chay: python 12_tong_hop_so_sanh.py
+# Thu muc con (trong _cache/) chua kfold_aggregate.csv + oof_predictions.csv
+# cua tung mo hinh, ghi boi cac file 01-10 khi da chay xong group k-fold.
+# Cap mo hinh de so sanh thong ke (giong buoc_25), chi lay cap co y nghia khoa hoc
+CONFORMAL_ALPHAS = [0.10, 0.05]     # 90% va 95%
+CONFORMAL_EPS = 10.0                # nguong y_hat toi thieu cho bien the chuan hoa
+# PHAN 1: Gom bang so sanh k-fold cua tat ca mo hinh (giong buoc_12, nhung CHI
+# DOC LAI ket qua da co, khong chay lai) + doi chieu voi cong thuc kinh nghiem
+# (buoc_20/file 11, bien the hieu chinh tren tap con seq de so sanh cong bang).
+        print(f"[luu y] chua co ket qua k-fold cho: {', '.join(missing)} "
+              "(hay chay file tuong ung truoc, vd python 07_gru.py)")
+    print("=== Bang so sanh Group K-Fold (doc lai tu _cache/, khong chay lai) ===")
+        print("Chua co mo hinh nao co ket qua k-fold trong _cache/.")
+        emp_best = emp[emp["Model"].str.contains(r"hieu chinh, tap con seq", regex=True)]
+        print("\n=== Doi chieu voi cong thuc kinh nghiem (hieu chinh, tap con seq_ok=1) ===")
+        print("\n[luu y] chua co ket qua cong thuc kinh nghiem (hay chay 11_cong_thuc_kinh_nghiem.py truoc)")
+    print(f"\nBang so sanh: {out_dir / '00_kfold_comparison.csv'}")
+# PHAN 2: Khoang du doan conformal (giong buoc_22) - chi ap dung cho mo hinh
+# co OOF theo fold (can >=2 fold de hieu chuan leave-fold-out).
+    """Phan vi hieu chinh huu han mau: ceil((n+1)(1-alpha))/n, method='higher'."""
+    y, yh, fold = oof["y_true"].to_numpy(), oof["y_pred"].to_numpy(), oof["Fold"].to_numpy()
+    abs_res = np.abs(y - yh)
+            lo = np.full(len(y), np.nan)
+            hi = np.full(len(y), np.nan)
+            lo = np.maximum(lo, 0.0)   # co ngot khong am
+            covered = (y >= lo) & (y <= hi)
+                "N": int(len(y)),
+            print(f"[bo qua] {name}: chi co {oof['Fold'].nunique()} fold "
+                  "(can >=2 de hieu chuan leave-fold-out)")
+        print("Chua co mo hinh nao du du lieu de tinh conformal (can oof_predictions.csv co >=2 fold).")
+    print("=== Conformal tu residual ngoai fold (leave-fold-out, group-honest) ===")
+            print(f"\n--- muc phu danh dinh {1-alpha:.0%}, phuong phap {method} ---")
+    print(f"\nKet qua conformal luu o: {out_dir}")
+# PHAN 3: Bootstrap CI theo cum GID + so sanh cap (giong buoc_25) - chi ap
+# dung cho mo hinh da co oof_predictions.csv (GID, y_true, y_pred).
+    """Doc OOF va gop ve thong ke du (sufficient statistics) theo GID."""
+    """stats: (G,5) cot [n, sy, sy2, sse, sae]; idx: (B,G) chi so GID lay mau lai."""
+        print("Chua co mo hinh nao co oof_predictions.csv de bootstrap.")
+    print(f"=== CI 95% theo mo hinh (bootstrap cum GID, B={BOOT_B}) ===")
+            print(f"[bo qua cap] {a} vs {b}: thieu du lieu OOF")
+        print("\n=== So sanh cap (hieu R2, cung mau bootstrap, tap GID chung) ===")
+    print(f"\nKet qua bootstrap luu o: {out_dir}")
+# CHAY THAT: gom bang so sanh + conformal + bootstrap CI
+    print("[Tong hop so sanh] PHAN 1/3: Bang so sanh Group K-Fold")
+    print("[Tong hop so sanh] PHAN 2/3: Khoang du doan conformal")
+    print("[Tong hop so sanh] PHAN 3/3: Bootstrap CI + so sanh cap")
+    print("\nDa chay xong toan bo pipeline tong hop so sanh.")

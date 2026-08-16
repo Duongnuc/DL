@@ -1,0 +1,229 @@
+"""File gop - 08_lstm.py
+goc: buoc_08_lstm.py, cong voi pipeline dung chung common_sequence_group.py,
+  2. Dinh nghia kien truc mo hinh + khong gian sieu tham so Optuna - tu buoc_08_lstm.py.
+duoc ghi vao thu muc an _cache/lstm/ de cac file tong hop phia sau (12, 13) co the
+Chay: python 08_lstm.py
+            y_transformed = log(1 + clip(y, 0))
+        y = np.log1p(np.clip(y_raw, 0.0, None)) if use_log1p else y_raw
+        sequences_y.append(y)
+    for i, (x, y) in enumerate(zip(xs, ys)):
+        batch_y[i, :length] = y
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+# PHAN 3/4 - KIEN TRUC MO HINH + SEARCH SPACE (gop tu buoc_08_lstm.py)
+Bước 08 - Mô hình LSTM (Long Short-Term Memory) cho dự đoán chuỗi thời gian co ngót.
+LSTM LÀ GÌ?
+LSTM (viết tắt của Long Short-Term Memory, tạm dịch: Bộ nhớ dài-ngắn hạn) là
+một kiến trúc mạng nơ-ron hồi quy (RNN) được đề xuất bởi Hochreiter & Schmidhuber
+năm 1997. Đây là kiến trúc RNN kinh điển và phổ biến nhất, được thiết kế đặc biệt
+để giải quyết vấn đề "mất trí nhớ dài hạn" (vanishing gradient problem) mà RNN
+truyền thống gặp phải khi xử lý chuỗi dài.
+Ý tưởng cốt lõi: LSTM có một "đường cao tốc" riêng gọi là cell state, cho phép
+thông tin quan trọng "chảy" xuyên suốt chuỗi mà không bị suy giảm. Ba cổng (gate)
+đặc biệt kiểm soát việc thêm, bớt, hoặc đọc thông tin từ cell state này.
+KIẾN TRÚC CHI TIẾT - BA CỔNG VÀ CELL STATE
+Tại mỗi bước thời gian (time step) t, LSTM nhận vào:
+  - x_t      : vector đặc trưng (features) tại thời điểm t
+  - h_{t-1}  : trạng thái ẩn (hidden state) từ bước trước
+  - C_{t-1}  : cell state (trạng thái tế bào) từ bước trước
+Và tính toán qua 3 cổng + 1 cell state:
+1) FORGET GATE (Cổng quên) - ký hiệu f_t:
+   Công thức: f_t = sigmoid(W_f * [h_{t-1}, x_t] + b_f)
+   - Quyết định "bao nhiêu phần trăm" thông tin trong cell state cũ sẽ bị XOÁ.
+   - Sigmoid cho giá trị từ 0 đến 1:
+     * f_t gần 0: XOÁ gần hết thông tin cũ -> "quên" đi quá khứ
+     * f_t gần 1: GIỮ gần hết thông tin cũ -> "nhớ" quá khứ
+   - Ví dụ co ngót: nếu điều kiện môi trường thay đổi đột ngột (chuyển từ
+     sấy sang ngâm nước), forget gate có thể "xoá" thông tin cũ không còn
+     liên quan.
+2) INPUT GATE (Cổng đầu vào) - ký hiệu i_t:
+   Công thức: i_t = sigmoid(W_i * [h_{t-1}, x_t] + b_i)
+   Ứng viên:  C_tilde = tanh(W_C * [h_{t-1}, x_t] + b_C)
+   - Input gate gồm 2 phần:
+     a) i_t: quyết định "bao nhiêu phần trăm" thông tin MỚI sẽ được GHI VÀO
+     b) C_tilde: vector "ứng viên" chứa thông tin mới tiềm năng (giá trị từ
+        -1 đến 1 nhờ tanh)
+   - Kết hợp: i_t * C_tilde = phần thông tin mới thực sự được thêm vào
+   - Ví dụ co ngót: khi có phép đo mới quan trọng (vd: co ngót tăng đột biến),
+     input gate "mở" để ghi nhận thông tin này vào bộ nhớ dài hạn.
+3) CẬP NHẬT CELL STATE:
+   Công thức: C_t = f_t * C_{t-1} + i_t * C_tilde
+   - Đây là bước QUAN TRỌNG NHẤT, kết hợp "quên" và "nhớ":
+     * f_t * C_{t-1}: phần thông tin cũ được GIỮ LẠI (sau khi forget gate lọc)
+     * i_t * C_tilde: phần thông tin mới được THÊM VÀO (sau khi input gate lọc)
+   - Cell state hoạt động như "băng chuyền" (conveyor belt): thông tin có thể
+     chảy xuyên suốt chuỗi gần như không thay đổi nếu forget gate = 1 và
+     input gate = 0. Đây chính là cách LSTM giải quyết vanishing gradient!
+4) OUTPUT GATE (Cổng đầu ra) - ký hiệu o_t:
+   Công thức: o_t = sigmoid(W_o * [h_{t-1}, x_t] + b_o)
+   - Quyết định "bao nhiêu phần trăm" thông tin từ cell state sẽ được XUẤT RA
+     thành hidden state (để dùng cho dự đoán và bước tiếp theo).
+   - tanh(C_t) nén cell state về khoảng [-1, 1]
+   - o_t chọn lọc phần nào được xuất ra
+   - Ví dụ co ngót: output gate quyết định thông tin nào trong bộ nhớ dài hạn
+     là hữu ích cho việc dự đoán co ngót tại thời điểm hiện tại.
+TẠI SAO LSTM CÓ CELL STATE? - SỰ KHÁC BIỆT CỐT LÕI VỚI GRU
+Cell state là "bộ nhớ dài hạn" RIÊNG BIỆT, tách khỏi hidden state:
+  - Hidden state (h_t): "bộ nhớ làm việc" - chứa thông tin cần thiết NGAY BÂY GIỜ
+    để đưa ra dự đoán và truyền cho bước tiếp theo.
+  - Cell state (C_t): "bộ nhớ dài hạn" - lưu trữ thông tin có thể cần TRONG
+    TƯƠNG LAI XA. Thông tin này được bảo vệ bởi các cổng, không bị biến đổi
+    liên tục qua các phép nhân ma trận như hidden state.
+Tại sao cần tách biệt?
+  a) Hidden state bị biến đổi mạnh qua mỗi bước (sigmoid, tanh) -> thông tin
+     suy giảm nhanh. Nếu chỉ dùng hidden state (như GRU), khó nhớ thông tin
+     từ 100+ bước trước.
+  b) Cell state có cơ chế CỘNG (additive): C_t = f * C_{t-1} + i * C_tilde
+     Phép cộng giúp gradient chảy ngược dễ dàng (không bị nhân nhiều lần),
+     nên thông tin từ rất xa vẫn có thể ảnh hưởng đến hiện tại.
+  c) Ba cổng riêng biệt cho phép kiểm soát tinh vi: quên cái gì, nhớ cái gì,
+     xuất ra cái gì - mỗi việc có "bộ điều khiển" riêng.
+GRU gộp cell state và hidden state thành MỘT (chỉ có h_t), đơn giản hơn nhưng
+ít linh hoạt hơn trong việc quản lý bộ nhớ dài hạn vs. ngắn hạn.
+SO SÁNH CHI TIẾT VỚI GRU (Gated Recurrent Unit)
+  Số cổng:              3 (forget+input+output)      2 (reset+update)
+  Cell state riêng:     CÓ (bộ nhớ dài hạn)         KHÔNG (chỉ hidden state)
+  Số tham số:           Nhiều hơn (~33% nhiều hơn)   Ít hơn
+  Tốc độ huấn luyện:   Chậm hơn                     Nhanh hơn
+  Bộ nhớ (RAM):         Tốn hơn                      Tiết kiệm hơn
+  Chuỗi ngắn (<100):   Có thể quá phức tạp          Thường đủ tốt
+  Chuỗi dài (>500):    Thường tốt hơn               Có thể kém hơn
+  Kiểm soát bộ nhớ:    Tinh vi hơn (3 cổng riêng)   Đơn giản hơn (2 cổng)
+  Dữ liệu ít:          Dễ overfitting hơn            Ít overfitting hơn
+  Nghiên cứu:          Lâu đời, nhiều biến thể       Mới hơn, ít biến thể
+Khi nào chọn LSTM thay vì GRU?
+  - Chuỗi dài và cần nhớ thông tin từ rất xa
+  - Dữ liệu đủ lớn để tránh overfitting
+  - Cần kiểm soát tinh vi giữa bộ nhớ dài hạn và ngắn hạn
+  - Pattern trong dữ liệu phức tạp, nhiều tầng trừu tượng
+Với dữ liệu co ngót, CÁCH TỐT NHẤT là chạy cả GRU và LSTM rồi so sánh kết quả,
+vì không có cách biết trước mô hình nào tốt hơn cho một tập dữ liệu cụ thể.
+   - Sử dụng thuật toán TPE (Tree-structured Parzen Estimator) - một dạng
+     Bayesian optimization - để "đoán" vùng tham số triển vọng dựa trên
+     kết quả các lần thử trước đó
+   - Hiệu quả hơn nhiều so với grid search (thử hết mọi tổ hợp) hoặc
+     random search (thử ngẫu nhiên)
+   - Vì các chuỗi có độ dài khác nhau (mỗi GID đo số ngày khác nhau),
+     ta phải padding (đệm số 0) các chuỗi ngắn để tạo batch đồng nhất
+   - Mask là tensor True/False đánh dấu: True = điểm dữ liệu THẬT,
+     False = điểm padding GIẢ
+   - Loss chỉ tính trên điểm THẬT: MSE = sum((y_pred - y_true)² * mask) / sum(mask)
+   - Nếu không dùng mask: mô hình sẽ học "dự đoán 0" cho padding, bóp méo kết quả
+   - Giá trị co ngót phân bố lệch phải: nhiều giá trị nhỏ, ít giá trị lớn
+   - log1p(y) = log(1 + y): "nén" dải giá trị, giúp phân phối gần chuẩn hơn
+   - Mô hình DL hoạt động tốt hơn khi target phân bố đối xứng, gần Gaussian
+   - Khi đưa ra dự đoán cuối cùng: dùng expm1(ŷ) = exp(ŷ) - 1 để chuyển ngược
+ƯU ĐIỂM CỦA LSTM
+  + Cell state riêng biệt -> nhớ thông tin rất xa trong chuỗi dài
+  + Ba cổng độc lập -> kiểm soát tinh vi dòng thông tin
+  + Cơ chế cộng (additive) trong cell state -> gradient chảy tốt, ít vanishing
+  + Kiến trúc lâu đời, được nghiên cứu kỹ lưỡng, nhiều biến thể cải tiến
+  + Thường vượt trội khi chuỗi dài (>500 bước) hoặc pattern phức tạp
+NHƯỢC ĐIỂM CỦA LSTM
+  - Nhiều tham số hơn GRU (~33%) -> chậm hơn khi huấn luyện và suy luận
+  - Tốn bộ nhớ (RAM/VRAM) hơn do lưu cả hidden state lẫn cell state
+  - Dễ overfitting hơn GRU khi dữ liệu ít (vì nhiều tham số hơn)
+  - Phức tạp hơn để hiểu, debug, và tinh chỉnh
+  - Với chuỗi ngắn, ưu thế cell state không rõ ràng -> GRU có thể đủ tốt
+  - Huấn luyện tuần tự (sequential) -> không tận dụng được song song hoá
+    như Transformer 
+  Chạy độc lập:  python buoc_08_lstm.py
+    Thay vì để chương trình crash với traceback khó đọc, ta tạo thông báo
+    rõ ràng bằng tiếng Việt, kèm gợi ý cách khắc phục cho người dùng.
+        str: Thông báo lỗi bao gồm nguyên nhân cụ thể và gợi ý sửa chữa.
+    """Mô hình hồi quy LSTM theo kiến trúc sequence-to-sequence (seq2seq).
+    Lớp này đóng gói toàn bộ kiến trúc mạng nơ-ron LSTM dùng để dự đoán
+    giá trị co ngót tại MỌI bước thời gian trong chuỗi (không chỉ bước cuối).
+    1. Lớp LSTM (nn.LSTM):
+       - Tại mỗi bước, áp dụng 3 cổng (forget + input + output) và cập nhật
+         cell state để quản lý bộ nhớ dài hạn
+       - Có thể xếp chồng nhiều tầng (num_layers > 1) để học biểu diễn sâu hơn
+       - Khi num_layers > 1: output tầng dưới là input tầng trên, dropout được
+         áp dụng GIỮA các tầng (không áp dụng ở tầng cuối cùng)
+       - Lớp kết nối đầy đủ (fully connected) chuyển hidden state -> giá trị
+         dự đoán co ngót
+       - Ánh xạ: hidden_dim chiều -> 1 chiều (1 giá trị scalar)
+       - Dùng CÙNG bộ trọng số cho mọi bước thời gian (weight sharing)
+    So sánh cấu trúc với GRU (buoc_07):
+       - GRU trả về: (output, h_n) - chỉ có hidden state
+       - LSTM trả về: (output, (h_n, c_n)) - có CẢ hidden state VÀ cell state
+       - Tuy nhiên, phần FC head giống hệt: chỉ dùng output (hidden state tại
+         mỗi bước) để dự đoán, không dùng trực tiếp cell state hay h_n/c_n
+        - batch_size: số chuỗi xử lý đồng thời. VD: 16 nhóm mẫu (GID) cùng lúc
+        - seq_len:    độ dài chuỗi (số bước thời gian), đã padding về cùng độ dài.
+                      VD: 50 ngày đo, các chuỗi ngắn hơn được đệm thêm số 0
+        - input_dim:  số features mỗi bước. VD: [tuổi, nhiệt_độ, độ_ẩm, ...] = 8
+    Trạng thái ẩn sau LSTM:
+        - Chứa hidden state tại MỌI bước thời gian (dùng cho seq2seq prediction)
+        - Hidden state CUỐI CÙNG của mỗi tầng (không dùng trong seq2seq)
+        - Cell state CUỐI CÙNG của mỗi tầng (không dùng trong seq2seq)
+    input_dim  (int):   Số lượng features đầu vào mỗi bước thời gian.
+    hidden_dim (int):   Kích thước hidden state VÀ cell state (cả hai cùng kích
+                        thước). Giá trị lớn hơn -> mô hình mạnh hơn nhưng chậm
+                        hơn và dễ overfitting. Thường thử: 32, 48, 64.
+    num_layers (int):   Số tầng LSTM xếp chồng. 1 tầng thường đủ cho bài toán
+                        đơn giản; 2 tầng giúp học biểu diễn trừu tượng hơn.
+    dropout    (float): Tỷ lệ dropout (0.0 đến 1.0) GIỮA các tầng LSTM.
+                        Ngẫu nhiên "tắt" neuron khi huấn luyện để chống overfitting.
+                        Chỉ có tác dụng khi num_layers > 1 (PyTorch không áp dụng
+                        dropout ở tầng cuối cùng).
+        # trọng số và hỗ trợ .to(device), .parameters(), .state_dict(), v.v.
+        # Lớp LSTM chính: xử lý chuỗi tuần tự qua các bước thời gian.
+        # KHÁC BIỆT với GRU (buoc_07):
+        #   - LSTM duy trì CẢ hidden state (h) VÀ cell state (c) qua mỗi bước
+        #   - Có 3 cổng thay vì 2 -> nhiều tham số hơn khoảng 33%
+        #   - Cùng hidden_dim=64: GRU có ~3*64*64 = 12,288 tham số cổng,
+        #     LSTM có ~4*64*64 = 16,384 tham số cổng (4 ma trận thay vì 3)
+        #   hidden_size = hidden_dim : kích thước hidden state VÀ cell state
+        #   num_layers  : số tầng LSTM xếp chồng (stacked LSTM)
+        #   dropout     : tỷ lệ dropout giữa các tầng (0 nếu chỉ 1 tầng)
+        #   batch_first = True : đầu vào có shape (batch, seq, feat) thay vì
+        #                 (seq, batch, feat). Cách này trực quan hơn.
+        # FC Head: lớp tuyến tính ánh xạ hidden state -> 1 giá trị dự đoán.
+        # Hoàn toàn giống với GRU (buoc_07): cùng cấu trúc Linear(hidden_dim, 1)
+        # vì cả GRU và LSTM đều xuất hidden state cùng kích thước.
+        KHÁC BIỆT với GRU:
+        - GRU: self.gru(x) trả về (output, h_n)
+        - LSTM: self.lstm(x) trả về (output, (h_n, c_n))
+          trong đó c_n là cell state cuối cùng (bộ nhớ dài hạn)
+        - Tuy nhiên, ta chỉ dùng output (hidden state tại mọi bước) nên
+          code trông gần giống nhau.
+        # Bước 1: Đưa chuỗi qua LSTM
+        # self.lstm(x) trả về tuple gồm 2 phần:
+        #   - hidden: (batch, seq_len, hidden_dim) - hidden state TẠI MỌI bước
+        #             Đây là output chính, chứa thông tin "đã lọc" từ cell state
+        #             qua output gate, sẵn sàng cho dự đoán.
+        #   - _     : tuple (h_n, c_n) - trạng thái cuối cùng:
+        #       h_n: (num_layers, batch, hidden_dim) - hidden state cuối mỗi tầng
+        #       c_n: (num_layers, batch, hidden_dim) - cell state cuối mỗi tầng
+        #     Ta không cần h_n và c_n vì dùng kiến trúc seq2seq (dự đoán ở
+        #     mọi bước, không chỉ bước cuối).
+        #   Lớp Linear áp dụng y = W * h + b cho mỗi vector hidden tại mỗi
+        #   bước thời gian, sử dụng CÙNG MỘT bộ trọng số W và bias b.
+        # .squeeze(-1): bỏ chiều cuối cùng có size=1
+        #   Kết quả: tensor 2D, mỗi phần tử là 1 giá trị dự đoán co ngót.
+    """Tạo mô hình LSTM từ bộ siêu tham số (hyperparameters) do Optuna đề xuất.
+    Mỗi khi Optuna thử một bộ tham số mới, hàm này tạo mô hình LSTM tương ứng
+    để huấn luyện và đánh giá.
+        nn.Module: Một instance LSTMRegressor sẵn sàng huấn luyện.
+        num_layers=int(params["num_layers"]),    # Số tầng LSTM (1 hoặc 2)
+    Optuna gọi hàm này mỗi trial (lần thử) để lấy bộ tham số mới.
+    Mỗi tham số được chọn từ khoảng giá trị hợp lý, và Optuna dần tập trung
+    vào vùng cho kết quả tốt nhất (Bayesian optimization với TPE).
+    LƯU Ý: Search space này GIỐNG HỆT với GRU (buoc_07). Điều này có CHỦ ĐÍCH:
+    - Cùng search space -> so sánh công bằng giữa 2 kiến trúc
+    - Sự khác biệt trong kết quả phản ánh khác biệt KIẾN TRÚC, không phải
+      khác biệt siêu tham số
+        Kích thước hidden state VÀ cell state (cả hai cùng kích thước trong LSTM).
+        Chọn từ 3 giá trị cố định. 32 = nhẹ, 64 = mạnh.
+        Lưu ý: cùng hidden_dim, LSTM có nhiều tham số hơn GRU (~33%) vì có
+        thêm 1 cổng (3 cổng vs 2 cổng) và cell state.
+        Số tầng LSTM xếp chồng. 1 tầng đã đủ mạnh cho nhiều bài toán.
+        2 tầng cho phép học biểu diễn trừu tượng hơn nhưng rủi ro overfitting.
+        Tỷ lệ dropout giữa các tầng. Đặc biệt quan trọng cho LSTM vì LSTM
+        có nhiều tham số hơn GRU -> cần regularization mạnh hơn để tránh overfitting.
+        Learning rate - tốc độ học. Log scale vì giá trị tối ưu thường phân bố
+        theo logarit. Đây là tham số ảnh hưởng NHIỀU NHẤT đến kết quả.
+        Weight decay - hệ số phạt L2. Ngăn trọng số quá lớn, cải thiện
+        khả năng tổng quát hoá (generalization).
+               để chọn giá trị tham số thông minh.

@@ -1,0 +1,12 @@
+numpy==2.2.1
+pandas==2.2.3
+scikit-learn==1.8.0
+scipy
+matplotlib==3.10.0
+openpyxl==3.1.5
+torch==2.10.0
+optuna==4.7.0
+shap==0.51.0
+xgboost==3.2.0
+lightgbm==4.5.0
+pytorch-tabnet==4.1.0

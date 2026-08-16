@@ -1,0 +1,83 @@
+"""File gop - 06_dcnv2.py
+goc: buoc_09_dcnv2.py, buoc_19_dcnv2_kfold.py, cong voi pipeline dung chung common_tabular.py,
+  2. Dinh nghia kien truc mo hinh + khong gian sieu tham so Optuna - tu buoc_09_dcnv2.py.
+duoc ghi vao thu muc an _cache/dcnv2/ de cac file tong hop phia sau (12, 13) co the
+Chay: python 06_dcnv2.py
+    te = regression_metrics(y_test_raw, pred_test_raw)
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+# PHAN 3/4 - KIEN TRUC MO HINH + SEARCH SPACE (gop tu buoc_09_dcnv2.py)
+Mô hình DCNv2 -- Deep & Cross Network version 2 (Mạng Sâu kết hợp Mạng Chéo).
+Mô hình gồm HAI nhánh chạy song song rồi ghép lại:
+  a) CROSS NETWORK (mạng chéo): tạo các "tương tác đặc trưng" (feature
+     interaction) một cách TƯỜNG MINH. Đây là điểm mấu chốt khiến DCNv2 phù
+     hợp để trả lời phản biện #4 (về tương tác giữa các biến như w/cm, fly ash,
+     nhiệt độ dưỡng hộ): kiến trúc tự học bậc tương tác (cross-order) thay vì
+     chỉ dựa vào SHAP/PDP hậu kỳ.
+  b) DEEP NETWORK (mạng sâu): một MLP thông thường học các quan hệ phi tuyến
+     bậc cao mà nhánh chéo không nắm hết.
+Hai nhánh được ghép song song (parallel structure) rồi đưa qua tầng đầu ra.
+2. CÔNG THỨC NHÁNH CHÉO (CrossLayerV2)
+Mỗi tầng chéo (cross layer) tính:
+        x_{l+1} = x_0 ⊙ (W_l · x_l + b_l) + x_l
+trong đó:
+  - x_0   : vector đặc trưng GỐC (đầu vào ban đầu), giữ nguyên qua mọi tầng.
+  - x_l   : đầu ra của tầng chéo thứ l.
+  - W_l   : MA TRẬN trọng số d×d (đây là điểm khác biệt của "v2" so với DCN
+            bản gốc dùng vector). Ma trận cho khả năng biểu diễn tương tác
+            mạnh hơn nhiều so với vector.
+  - ⊙     : nhân theo từng phần tử (element-wise).
+  - + x_l : kết nối tắt (skip connection) -- giúp huấn luyện ổn định.
+Ý nghĩa: sau l tầng, mô hình biểu diễn được các tương tác đặc trưng tới bậc
+(l+1). Ví dụ 2 tầng chéo nắm được tương tác bậc 3 giữa các biến đầu vào.
+3. KIẾN TRÚC TỔNG THỂ (parallel)
+   n_cross tầng chéo           deep_layers tầng FC
+   (giữ kích thước in_dim)     (FC -> BN -> ReLU -> Dropout)
+              Head: FC(-> 1)   = giá trị dự đoán (hồi quy)
+4. SIÊU THAM SỐ (Optuna tối ưu)
+  - n_cross (1-3)     : số tầng chéo -> bậc tương tác đặc trưng tối đa.
+  - deep_h (64-256)   : số nút mỗi tầng của nhánh sâu.
+  - deep_layers (1-3) : số tầng của nhánh sâu.
+  - dropout (0.05-0.3): chống overfit ở nhánh sâu.
+  - lr, wd            : learning rate và weight decay cho AdamW.
+  - Mô hình hoá tương tác đặc trưng TƯỜNG MINH (giải thích được, hợp phản biện #4).
+  - Nhánh chéo ít tham số, ổn định; nhánh sâu bổ sung phi tuyến bậc cao.
+  - Thường mạnh trên dữ liệu bảng có nhiều tương tác giữa các biến.
+  - Nhiều bộ phận hơn MLP đơn -> nhiều siêu tham số phải tuning.
+  - Ma trận d×d ở mỗi tầng chéo tốn hơn vector (DCN v1) khi in_dim lớn.
+Chạy độc lập:  python buoc_09_dcnv2.py
+# Kiến trúc mạng
+    """Một tầng chéo (cross layer) phiên bản v2 dùng ma trận trọng số d×d.
+    Tính: x_{l+1} = x_0 ⊙ (W · x_l + b) + x_l
+      - x0: đầu vào gốc (giữ nguyên qua mọi tầng), shape (batch, d).
+      - xl: đầu ra tầng chéo trước, shape (batch, d).
+      - W·xl + b: phép biến đổi tuyến tính (nn.Linear) -> shape (batch, d).
+      - Nhân element-wise với x0 rồi cộng skip connection xl.
+        # nn.Linear(d, d) chính là W·x + b với W kích thước d×d.
+        # x0 ⊙ (W·xl + b) + xl
+    """Deep & Cross Network v2 -- cấu trúc song song (parallel).
+        in_dim      (int):   Số đặc trưng đầu vào.
+        n_cross     (int):   Số tầng chéo (bậc tương tác tối đa = n_cross + 1).
+        deep_h      (int):   Số nút mỗi tầng của nhánh sâu (deep network).
+        deep_layers (int):   Số tầng của nhánh sâu.
+        dropout     (float): Tỷ lệ dropout ở nhánh sâu.
+        # --- Nhánh chéo: n_cross tầng CrossLayerV2 (giữ nguyên kích thước in_dim) ---
+        # LayerNorm chặn độ lớn đầu ra nhánh chéo trước khi ghép. Cần thiết vì phép
+        # nhân x0 ⊙ (W·x_l) có thể khuếch đại bất thường trên dữ liệu test ngoài
+        # phân phối (out-of-distribution) khi chia theo nhóm GID, gây dự đoán bùng nổ.
+        # --- Nhánh sâu: MLP [FC -> BN -> ReLU -> Dropout] x deep_layers ---
+        # --- Head: ghép song song [cross (in_dim) | deep (deep_out_dim)] -> 1 ---
+        # Nhánh chéo: lặp qua các tầng, luôn giữ x0 = x gốc
+        xl = self.cross_norm(xl)  # chặn độ lớn đầu ra nhánh chéo (ổn định trên test OOD)
+        # Nhánh sâu
+        # Ghép song song rồi đưa qua tầng đầu ra
+    """Định nghĩa không gian tìm kiếm siêu tham số cho DCNv2."""
+        # learning rate (thang log) -- vùng an toàn cho AdamW trên dữ liệu bảng
+        # weight decay (L2) -- regularization MẠNH để giữ trọng số head nhỏ,
+        # tránh nhánh chéo extrapolate bùng nổ trên test ngoài phân phối (OOD).
+        # dropout ở nhánh sâu (cận dưới cao hơn để chống overfit OOD)
+        # số tầng chéo: giới hạn 1-2 (bậc tương tác 2-3) để hạn chế khuếch đại
+        # số nút mỗi tầng nhánh sâu -- capacity vừa phải
+        # số tầng nhánh sâu
+    """Factory: tạo một instance DCNv2 từ bộ tham số Optuna đề xuất."""
+    print(f"[{MODEL_NAME}] BUOC 2/4: Holdout (train/val/test 1 lan, Optuna 8 trial)")

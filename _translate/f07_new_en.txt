@@ -1,0 +1,530 @@
+"""Merged file - 07_gru.py
+This file MERGES TOGETHER (without omission) content from the original files in the research pipeline
+original: buoc_07_gru.py, plus the shared pipeline common_sequence_group.py,
+  1. Prepare sequence-shaped data from the raw Excel file - from buoc_01.
+  2. Define the model architecture + Optuna hyperparameter search space - from buoc_07_gru.py.
+  3. Run HOLDOUT (single train/val/test split by GID) AND GROUP K-FOLD (5 fold)
+     to evaluate stability, using the shared engine of common_sequence_group.py.
+written to the hidden _cache/gru/ directory so downstream summary files (12, 13) can
+Run: python 07_gru.py
+# PART 1/4 - SHARED PIPELINE FOR SEQUENCE MODELS (merged from common_sequence_group.py)
+# Disable Dynamo (PyTorch 2.x's JIT compiler) since it is not needed on CPU
+# and can cause errors or be slower in some cases.
+# Limit the number of threads to avoid resource contention when running multiple experiments in parallel.
+# Set PyTorch threads = 1 to avoid multi-threading overhead on a small CPU.
+# If a RuntimeError occurs (e.g. already set previously), ignore it.
+# Columns to exclude from the feature set:
+# - GID: group code, used to split the data, not a feature
+# - dt_days: time (days), already embedded in the sequence order
+# - y_shrinkage_total_mm_per_m: target variable, must not be used as input
+# - y_log1p: log-transformed target variable, also must not be used as input
+# - seq_ok: flag marking a valid sequence, only used for filtering
+# Categorical columns will be converted to one-hot encoding.
+    """Configuration for one run of a sequence model benchmark.
+    This is a dataclass containing all the parameters needed to run an experiment.
+    The user just needs to create a SequenceBenchmarkConfig object then pass
+    it into the run_sequence_benchmark() function.
+    Parameters:
+        data_path: Path to the CSV file with preprocessed input data.
+        output_dir: Directory to save results (CSV, JSON) after the run finishes.
+        model_name: Model name (e.g. "LSTM", "GRU", "Transformer"),
+            used when writing the results report.
+        seeds: List of random seeds. Each seed produces a different data split
+            and training run, helping evaluate the model's stability.
+            Default is [42].
+        n_trials: Number of hyperparameter trials via Optuna.
+            Optuna will run n_trials times, trying a different parameter set each time,
+            then choose the best one. Default is 1 (no tuning, runs fast).
+        max_epochs: Maximum number of epochs for each training run. An epoch is one
+            pass through the entire training set. Default is 10.
+        patience: Number of consecutive epochs with no val loss improvement before stopping early
+            (early stopping). Helps avoid overfitting. Default is 3.
+        batch_size: Number of sequences per batch during training.
+            A larger batch is faster but uses more RAM. Default is 16.
+        device: Compute device ("cpu" or "cuda"). Default is "cpu".
+    # Number of folds for group k-fold cross-validation (only used by run_sequence_kfold).
+    """Stores the index of rows belonging to the train, val, test sets.
+    After splitting the data by group (GID), each row in the original DataFrame
+    is assigned to one of the three sets. This dataclass stores those indices
+    so the data can be extracted later.
+    """Converts an absolute path into a path relative to the package root directory.
+    Purpose: save into the metadata JSON so the results can be read on
+    different machines (portable). If the relative path cannot be computed,
+    return a POSIX-style path (using / separators).
+    """Writes empty output files when the benchmark is skipped.
+    When an error occurs (e.g. insufficient memory, invalid data),
+    this function creates empty CSV/JSON files so the pipeline doesn't break.
+    The metadata file records the skip reason (skip_reason) so the user
+    can check it later.
+    """Sets the random seed for all libraries so results can be reproduced.
+    Deep learning has many sources of randomness: weight initialization, data shuffling,
+    dropout, etc. Setting the same seed helps reruns produce the same result (reproducibility).
+    """Computes evaluation metrics for a regression model.
+    Returns a dict containing:
+        - N: number of samples
+        - R2: coefficient of determination (1.0 is perfect, can be negative if predictions are very bad)
+        - RMSE: root mean squared error (same unit as y)
+        - MAE: mean absolute error (same unit as y)
+        - NRMSE_IQR_pct: RMSE normalized by the interquartile range (%), helps compare
+          across datasets with different distributions
+    """Aggregates results from multiple seeds into a mean and standard deviation.
+    When running multiple seeds, each seed produces one result row. This function groups
+    by (Split, Family, Model) then computes mean and std for each metric,
+    helping evaluate whether the model is stable.
+    """Splits values into q quantile-based groups for use in a stratified split.
+    Stratified split means splitting the data so that each set (train/val/test)
+    has a similar distribution. This function creates group labels (0, 1, ..., q-1) based
+    on quantiles. Returns None if there isn't enough data to split (each group needs
+    at least 2 elements).
+    """Splits the data into train/val/test by GID group (group-wise split).
+    This is the most important step to avoid data leakage in the sequence problem:
+    - Each GID (experimental sample group) appears in only ONE set.
+    - If the same GID is present in both train and test, the model will "memorize" instead
+      of "learn", leading to a biased evaluation (hidden overfitting).
+    1. Compute the median fc28 of each GID to use as the stratification strategy.
+       This ensures the sets have similar fc28 distributions.
+    2. Split GID into train (70%) and temporary (temp, 30%) via stratified split.
+    3. Split temp further into val (15%) and test (15%) via stratified split.
+    4. Map back from GID to the row indices in the original DataFrame.
+    # Compute median fc28 for each GID to use as the stratification criterion
+    # Step 1: split off 70% train, 30% temporary (temp)
+    # Step 2: split the 30% temp into 15% val + 15% test
+    # Reverse mapping: from the GID list of each set, find the corresponding row indices
+    """Creates folds for GROUP K-FOLD cross-validation on sequence data.
+    A copy of the logic in common_tabular but used for the sequence pipeline:
+    - Each GID (sample group) belongs to the test set EXACTLY ONCE across K folds, never
+      appearing in both train and test within the same fold -> no data leakage.
+    - Stratified by each GID's median fc28 so the folds have balanced distributions.
+    Process for each fold k:
+        test = GIDs of fold k; the rest is split into train/val (val is approximately val_fraction
+        of the remainder, stratified by fc28 if possible).
+    Returns: a list of [(SplitIndices, fold_id)] with fold_id running 0..K-1.
+    """Creates a diagnostic report about the data split.
+    Checks the number of rows, number of GID groups, and in particular whether there is
+    GID overlap between the sets (Overlap). If Overlap > 0 it means there is data leakage
+    and the split logic needs to be fixed.
+    """Extracts the sub-DataFrame for each of the train, val, test sets from the split indices.
+    Resets the index so the sub-DataFrames have a contiguous index starting at 0,
+    avoiding errors when accessed by position (iloc) later.
+    """Builds the feature matrix for each set.
+    1. Removes the columns in EXCLUDE_COLUMNS (target, GID, etc.).
+    2. Normalizes (StandardScaler) the numeric columns: fit ONLY on train,
+       then transform both val and test. This is the golden rule to avoid
+       data leakage - val/test must not influence the fitting process.
+    3. One-hot encoding for categorical columns. Ensures val/test have the same
+       columns as train (reindex), filling 0 for missing values.
+    Returns: (train_feat, val_feat, test_feat, list_of_column_names)
+    # Fill missing values (NaN) using the median computed ONLY on train (avoids leakage).
+    # Normalize numeric columns: fit on train, transform on all
+    # One-hot encoding for categorical columns
+        # Ensure val/test have the same columns as train, fill 0 for missing columns
+    # Concatenate numeric and categorical columns into one complete feature matrix
+    """Converts a DataFrame into a list of (X, y) sequences per GID.
+    Each GID forms a time series: rows are sorted by dt_days
+    (measurement day), forming a sequence of time steps.
+    log1p transform for the target:
+        If use_log1p=True (default), the target y is converted to log1p:
+            y_transformed = log(1 + clip(y, 0))
+        Why is log1p needed?
+        - The shrinkage value has a right-skewed distribution:
+          most values are small, a few values are very large.
+        - log1p compresses the value range, making the gradient more stable during training.
+        - Without log1p, large values would produce very large gradients, potentially
+          preventing the model from converging (exploding gradient).
+        - clip(y, 0) ensures there are no negative values before taking the log.
+        - Matches the tabular pipeline to ensure the same target transform.
+        When computing the final metric, expm1 (the inverse of log1p) must be used
+        to convert back to the original scale (mm/m).
+    # Create a __row_id__ column to map between the original df and features_df after sorting
+    # Sort by GID and dt_days to create the time series in the correct order
+    # Merge features by __row_id__ to keep the correct order after sorting
+        # Use log1p(clip(y, 0)) instead of the raw value so the loss is smaller, the model learns better.
+        # Use clip(lower=0) matching the tabular pipeline to ensure the same target transform.
+        y = np.log1p(np.clip(y_raw, 0.0, None)) if use_log1p else y_raw
+        sequences_y.append(y)
+    """PyTorch Dataset for sequence data.
+    This is a wrapper class so the PyTorch DataLoader can fetch each sequence
+    by index. Each element is a pair (X, y) with:
+        - X: 2D array (n_time_steps, n_features)
+        - y: 1D array (n_time_steps,) containing the target at each step
+    """Combines multiple sequences of different lengths into a batch via padding and mask.
+    Problem: sequences in the same batch can have different lengths
+    (e.g. GID A has 5 steps, GID B has 8 steps). PyTorch requires the tensor
+    to have a fixed size in each dimension.
+    Solution - Padding and Mask:
+    1. Padding: Add zeros to the end of shorter sequences so all of them have the same length
+       as the longest sequence in the batch. This 0 value is fake, has no meaning.
+    2. Mask: Create a binary (0/1) tensor marking which positions are real data (1)
+       and which positions are padding (0). When computing loss, only compute on positions where mask=1.
+        - batch_x: tensor (batch_size, max_len, feat_dim) - padded features
+        - batch_y: tensor (batch_size, max_len) - padded target
+        - batch_mask: tensor (batch_size, max_len) - mask marking real positions
+    # Find the longest length in the batch to pad the shorter sequences
+    # Initialize with 0: padding positions will automatically be 0
+    for i, (x, y) in enumerate(zip(xs, ys)):
+        # Only fill real data into the beginning part, leave the rest as 0
+        batch_y[i, :length] = y
+        # Mark positions with real data = 1.0
+    """Computes Mean Squared Error only on positions with real data (mask=1).
+    Why is a mask needed?
+    Because sequences in a batch have different lengths, they have been padded with 0.
+    If MSE were computed on padding positions too, the model would be "penalized" for predicting
+    something other than 0 at those padding positions - this is meaningless and would bias
+    the training process. The mask helps skip padding positions, computing loss only on
+    real data.
+    Formula: sum((pred - target)^2 * mask) / sum(mask)
+    clamp_min(1.0) avoids dividing by 0 when there are no valid positions.
+    # Multiply by mask: padding positions (mask=0) will have loss = 0
+    # Divide by the total mask (number of real positions) instead of the total number of elements
+    """Runs the model over the whole DataLoader and collects predictions.
+    Sets the model to eval mode (disables dropout, batch norm uses running stats)
+    and uses torch.no_grad() to skip gradient computation, saving memory.
+    Only takes values at positions where mask > 0.5 (real data, not padding).
+    Returns: (y_true, y_pred) as 1D arrays in log1p space.
+            # Only take predictions at positions with real data (not padding)
+    """Measures feature importance via permutation importance for the sequence model.
+    For each feature, shuffle its value ALONG THE TIME AXIS
+    within each sequence (keeping each sample's length unchanged, only breaking the time
+    order of that particular feature), then measure how much the MSE on val increases relative to
+    the baseline. Reuses the ALREADY-TRAINED model of the current fold (does not
+    retrain).
+    """Trains the sequence model with overfitting-prevention techniques.
+    This function uses several important deep learning techniques:
+       - Adam is the most popular optimization algorithm for DL, combining momentum
+         and adaptive learning rate (automatically adjusting the learning speed for each parameter).
+       - AdamW is an improved version with decoupled weight decay,
+         giving more effective regularization than the original Adam.
+       - lr (learning rate): learning speed, determines the step size when updating weights.
+       - weight_decay (wd): penalty coefficient for large weights, helps avoid overfitting.
+       - Automatically reduces the learning rate when val loss stops improving.
+       - factor=0.5: each time it reduces, new lr = old lr * 0.5.
+       - patience=max(2, patience//3): how many epochs to wait before reducing.
+       - Helps the model "fine-tune" once it's close to convergence.
+       - Clips the gradient if its norm exceeds 1.0.
+       - Why? In sequence models (RNN, LSTM), the gradient can explode
+         (exploding gradient) when propagated through many time steps.
+       - Clipping helps stabilize the training process.
+       - Stops training early if val loss doesn't improve after 'patience' epochs.
+       - Why? After a while, the model starts "memorizing" the training set instead of
+         "learning" the general pattern (overfitting). Val loss will increase.
+       - Saves the best weights (best_state) and restores them after stopping.
+    Returns: (best_model, best_epoch, best_val_loss, val_loss_history)
+    val_loss_history contains the val_loss of EACH epoch that ran (for plotting the learning curve).
+    # Initialize AdamW with learning rate and weight decay from Optuna
+    # Scheduler automatically reduces lr when val loss stops improving
+        # Training mode: enables dropout, batch norm uses batch stats
+            # Clear old gradients before computing new ones
+            # Compute loss only on real positions (not padding)
+            # Backpropagate to compute the gradient
+            # Clip the gradient to prevent exploding
+            # Update the weights
+        # Evaluate on the validation set after each epoch
+        # Inform the scheduler of the current val loss
+            # Found a better model, save its weights
+            # Val loss did not improve, increment the wait counter
+                # Waited long enough, stop early (early stopping)
+    # Restore the best weights (not the final weights)
+    """Reads data, filters valid sequences, splits by GID, and builds features.
+    This is a utility function that groups the preprocessing steps into a single call:
+    1. Read the CSV and filter to keep only rows with seq_ok=1 (valid sequences).
+    3. Build the feature matrix (build_feature_frames).
+    4. Create the diagnostic report (split_diagnostics).
+    # Keep only rows with a valid sequence (seq_ok=1)
+    """Runs the entire benchmark pipeline for a sequence model.
+    This is the main function orchestrating the whole process:
+    Optuna hyperparameter search process:
+        - Optuna is a hyperparameter optimization library.
+        - Each "trial" is one attempt with a different parameter set (lr, hidden_size, etc.).
+        - suggest_params_fn: a function provided by the user, asking Optuna to suggest
+          a value for each parameter (e.g. lr in the range [1e-4, 1e-2]).
+        - Optuna picks the parameter set with the lowest val loss.
+    Saving the best model (WITHOUT retraining from scratch):
+        - Reason: if retrained with the same parameters but different random
+          weight initialization, the result could be very different. So, the
+          state_dict of the best model found during the Optuna process is saved directly.
+    Converting predictions from log-space back to the original scale:
+        - The model predicts in log1p space.
+        - Clip the predictions to [0, log_cap] before expm1.
+        - log_cap = 120% of train_y's max value in log-space.
+        - Why clip? If the model predicts a value that is too large in log-space,
+          expm1 would produce an extremely large value (exploding), corrupting the metric.
+        - expm1 is the inverse of log1p: expm1(log1p(x)) = x.
+        cfg: benchmark configuration (see SequenceBenchmarkConfig).
+        build_model_fn: model-building function, receives (n_features, params) -> nn.Module.
+        suggest_params_fn: function suggesting parameters for Optuna.
+    Returns: dict mapping file name -> result file path.
+            # Save the best model from Optuna (WITHOUT retraining from scratch).
+            # Reason: retraining from scratch with different random weights -> the result could be very different.
+                """Objective function for Optuna: trains the model and returns val loss."""
+                # Save the state_dict of the model with the lowest val loss across all trials
+            # Create an Optuna study aiming to minimize val loss
+            # Restore the best model instead of retraining
+                # Fallback case: if no saved state exists, retrain
+            # Combine the metrics of the 3 sets (train/val/test) into a single result row
+            # Bound in log-space: 120% of train_y's max value.
+            # Purpose: avoid expm1 exploding when the model predicts too large a value.
+                # Clip the prediction before expm1 to avoid exploding values
+                # Convert from log-space back to the original scale (mm/m) to compute the metric
+        return write_skip_outputs(cfg, f"Insufficient memory or an error occurred while training the sequence model. Original error: {exc}")
+    # Create a combined DataFrame from all seeds
+    # Write the results to CSV and JSON files
+    """Predicts each sequence (by GID) one at a time, returning (gid_per_point, pred_log_per_point).
+    Evaluates each sequence separately (batch size = 1) to preserve the correct point -> GID mapping,
+    for collecting out-of-fold predictions at the individual measurement-point level (for scatter/residual plots).
+    """Runs GROUP K-FOLD cross-validation for a sequence model (GRU/LSTM).
+    Unlike run_sequence_benchmark (a single holdout split per seed), this function
+    splits GID into cfg.n_splits folds. Each fold takes a turn as the test set; the rest
+    is split into train/val and hyperparameters are optimized with Optuna. Each fold uses its own
+    StandardScaler + imputation fit ON THAT FOLD'S TRAIN set (no data leakage).
+    Results written out (mirroring the tabular pipeline):
+        kfold_summary.csv   : each row = one fold (train/val/test metrics).
+        kfold_aggregate.csv : mean +/- standard deviation ACROSS FOLDS.
+        oof_predictions.csv : out-of-fold predictions at the measurement-point level (GID, Fold, y_true, y_pred).
+        split_summary.csv   : per-fold data split diagnostics (checks GID overlap).
+        best_params.json    : best hyperparameters of each fold.
+    Uses cfg.seeds[0] as the fold-split seed for reproducibility.
+            # Collect the per-epoch val_loss history of this fold's best model (for plotting the learning curve)
+            # Measure feature importance (permutation importance) using this fold's trained model
+            # Out-of-fold predictions at the measurement-point level (keeping the correct GID for each point)
+        return write_skip_outputs(cfg, f"Error while running sequence k-fold ({cfg.model_name}). Original error: {exc}")
+# common_sequence_group.py imports torch WITHOUT try/except (unlike common_tabular.py):
+# if execution reaches this point it means torch was already imported successfully above, so it will always be None.
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+# PART 3/4 - MODEL ARCHITECTURE + SEARCH SPACE (merged from buoc_07_gru.py)
+Step 07 - GRU (Gated Recurrent Unit) model for predicting shrinkage time series.
+WHAT IS GRU?
+GRU (short for Gated Recurrent Unit) is
+a recurrent neural network (RNN) architecture proposed
+by Cho et al. in 2014. It is a simplified version of LSTM, designed
+to address the "long-term memory loss" (vanishing gradient) problem that traditional
+RNNs suffer from, but with fewer parameters than LSTM.
+Core idea: when processing data sequences over time (e.g. the shrinkage level
+of concrete over successive days), the model needs to "remember" important information from the
+past and "forget" what is no longer relevant. GRU does this through
+two special gates.
+DETAILED ARCHITECTURE - GRU'S TWO GATES
+At each time step t, GRU receives:
+  - x_t  : the feature vector at time t
+  - h_{t-1}: the hidden state from the previous step
+And computes through 2 gates:
+1) RESET GATE - denoted r_t:
+   Formula: r_t = sigmoid(W_r * [h_{t-1}, x_t])
+   - Decides "what percentage" of past information (h_{t-1}) will be DISCARDED
+     when computing the new hidden state.
+   - If r_t is near 0: the model almost "forgets everything" from the past, relying only on the
+     current data x_t -> useful when encountering a turning point, a sudden change.
+   - If r_t is near 1: the model retains most of the past -> useful when a trend
+     is still continuing steadily.
+   - Shrinkage example: if currently in the initial drying stage (rapid change),
+     the reset gate may "open" to react quickly to new data.
+2) UPDATE GATE - denoted z_t:
+   Formula: z_t = sigmoid(W_z * [h_{t-1}, x_t])
+   - Decides "what percentage" of the newly computed hidden state will REPLACE
+     the old hidden state.
+   - If z_t is near 1: KEEPS the old state h_{t-1} unchanged, ignoring new information
+     -> acts like a "shortcut" (skip connection), helping combat vanishing gradient.
+   - If z_t is near 0: FULLY REPLACES with the new state
+     -> the model actively updates when there is important new information.
+   - Shrinkage example: in a stable stage (slow shrinkage), the update gate tends to be
+     near 1 to "keep" the state, no need to update much.
+The new hidden state is computed as:
+   h_tilde = tanh(W * [r_t * h_{t-1}, x_t])   <-- "candidate" state
+   h_t     = z_t * h_{t-1} + (1 - z_t) * h_tilde  <-- combining old + new
+Important note: GRU does NOT have a separate cell state (unlike LSTM). All
+memory is packed into the hidden state h_t. This makes GRU simpler
+but also limits its ability to store extremely long-term information.
+WHY USE GRU FOR SHRINKAGE TIME SERIES?
+Concrete shrinkage data has the following characteristics:
+  - It is a time series: measurements are recorded in time order
+  - It has a trend: shrinkage typically increases then gradually stabilizes over time
+  - It is context-dependent: today's shrinkage value depends on the previous day
+  - Variable length: each sample group (GID) has a different number of measurements
+GRU is well suited because:
+  a) It processes sequential data naturally (one time step at a time)
+  b) The update gate helps "remember" the long-term shrinkage trend
+  c) The reset gate helps "adapt" when there is a sudden change
+  d) It is faster than LSTM, saving training time
+  e) It has fewer parameters than LSTM, so it overfits less on small data
+SEQUENCE-TO-SEQUENCE (SEQ2SEQ) PREDICTION ARCHITECTURE
+Instead of predicting only 1 final value (many-to-one), this model predicts
+a value at EVERY time step (many-to-many, i.e. seq2seq):
+  Input:  [x_1, x_2, ..., x_T]    (T steps, each step has D features)
+  Output: [y_1, y_2, ..., y_T]    (T predicted shrinkage values)
+How it works:
+  Step 1: GRU processes x_1 -> produces h_1
+  Step 2: GRU processes x_2 (along with h_1) -> produces h_2
+  Step T: GRU processes x_T (along with h_{T-1}) -> produces h_T
+  Then, each h_t is passed through a Linear layer (FC head):
+Reason for using seq2seq: every shrinkage measurement point matters, not just the last one.
+The model learns to predict the ENTIRE shrinkage curve, not just the final value.
+COMPARISON WITH LSTM (Long Short-Term Memory)
+  Number of gates:       2 (reset + update)          3 (forget + input + output)
+  Separate cell state:   NO                          YES (dedicated long-term memory)
+  Number of parameters:  Fewer (~25% fewer than LSTM)  More
+  Training speed:        Faster                       Slower
+  Short sequences (<100): Usually good enough          Can be overly complex
+  Long sequences (>500):  May be worse                 Usually better
+  Small data:            Less overfitting               More prone to overfitting
+With shrinkage data (typically short-to-medium sequences, not very large data),
+GRU is usually a good and more efficient choice than LSTM.
+HOW IT'S OPTIMIZED: OPTUNA + MASKED MSE + LOG1P TARGET
+   - Automatically searches for the best hyperparameter set (hidden_dim, num_layers, etc.)
+   - Instead of trying every combination (grid search), Optuna uses a smart algorithm
+     (TPE - Tree-structured Parzen Estimator) to "guess" promising parameter regions
+   - Saves a lot of time compared to grid search
+2) Masked MSE (Mean Squared Error with a mask):
+   - Because sequences have different lengths, we must pad shorter sequences
+     with a fake value (usually 0) to form a uniform batch
+   - The mask marks which points are REAL and which are FAKE (due to padding)
+   - When computing the loss, only compute MSE on the REAL points, skipping the padding points
+   - Without a mask: the model would "learn" to predict 0 for padding positions,
+     biasing the result
+3) Log1p target (logarithmic transform):
+   - The shrinkage value has a right-skewed distribution: many small values, few
+     large values
+   - log1p(y) = log(1 + y) "compresses" the distribution, making it more symmetric
+   - The model learns more easily when the target has a near-Gaussian distribution
+   - When predicting, use expm1() to convert back: expm1(y_hat) = exp(y_hat) - 1
+ADVANTAGES OF GRU
+  + Simple, few parameters -> fast training, less overfitting
+  + Good performance for short-to-medium sequences
+  + Easier to implement and debug than LSTM
+  + Good gradient flow thanks to the update gate (similar to a skip connection)
+  + Suitable when data is limited (less prone to overfitting)
+DISADVANTAGES OF GRU
+  - No separate cell state -> hard to remember information very far back in long sequences
+  - For very long sequences (>500 steps), LSTM is usually superior
+  - Less flexible than LSTM in controlling information flow
+  - Not always better than LSTM; both should be tried for comparison
+  Run standalone:  python buoc_07_gru.py
+  Run from the overall pipeline (buoc_10): run_benchmark(cfg) will be called automatically
+    """Creates a detailed error message when the model cannot be initialized.
+    This function is called when the torch or common_sequence_group import fails.
+    Instead of letting the program crash with a confusing traceback, we create a
+    clear message, with suggestions on how to fix it.
+        str: Error message including the cause and a suggested fix.
+        f"Cannot initialize the {MODEL_NAME} model. "
+        f"torch error: {TORCH_IMPORT_ERROR}. helper error: {SEQ_IMPORT_ERROR}. "
+        "Suggestion: use a dedicated DL environment, install torch."
+    """GRU regression model using a sequence-to-sequence (seq2seq) architecture.
+    This class encapsulates the entire GRU neural network architecture used to predict the
+    shrinkage value at EVERY time step in the sequence (not just the last step).
+    Internal architecture:
+    1. GRU layer (nn.GRU):
+       - Receives the input feature sequence, processing each time step sequentially
+       - At each step, applies 2 gates (reset + update) to update the hidden state
+       - Can be stacked into multiple layers (num_layers > 1) to learn more complex representations
+       - When num_layers > 1: the lower layer's output is the upper layer's input,
+         dropout is applied BETWEEN layers (not applied at the last layer)
+       - Fully connected layer converting hidden state -> predicted value
+       - Maps from hidden_dim dimensions -> 1 dimension (1 shrinkage value)
+       - Applied with the SAME SET OF WEIGHTS for every time step
+         (parameter sharing, helps reduce overfitting)
+    Data sizes (tensor shapes):
+    Input x:
+        - batch_size: number of sequences processed simultaneously in 1 batch
+          Example: batch_size=16 means 16 sample groups (GID) at once
+        - seq_len:    sequence length (number of time steps), already padded to the same
+                      length within 1 batch. Example: 50 measurement days
+        - input_dim:  number of features at each time step
+                      Example: [age, temperature, humidity, cement_ratio, ...] = 8 features
+    Hidden state after GRU:
+        - hidden_dim: size of the hidden state vector, chosen by the user
+          Example: hidden_dim=64 means each time step has a 64-dimensional vector
+                 containing a "summary" of the entire past up to that point
+    Output (predictions):
+        - Each element is 1 predicted shrinkage value at the corresponding time step
+    input_dim  (int):   Number of input features at each time step.
+                        Automatically determined from the training data.
+    hidden_dim (int):   Size of the hidden state. A larger value allows the model to
+                        learn more complex patterns, but increases computation time
+                        and overfitting risk. Commonly tried: 32, 48, 64.
+    num_layers (int):   Number of stacked GRU layers. 1 layer is usually enough for simple
+                        data; 2 layers help learn more abstract representations but are slower.
+    dropout    (float): Dropout rate (0.0 to 1.0) BETWEEN GRU layers.
+                        Dropout randomly "disables" some neurons during
+                        training to fight overfitting. Only has an effect when
+                        num_layers > 1 (because dropout is applied between layers, not
+                        applied at the last layer).
+        # Call the parent class nn.Module's __init__ - required so PyTorch manages
+        # the parameters (weights, biases) and supports .to(device), .parameters(), etc.
+        # Main GRU layer: processes the sequence over time steps.
+        # Parameters:
+        #   input_size  = input_dim  : number of input features per step
+        #   hidden_size = hidden_dim : size of the hidden state vector
+        #   num_layers  : number of stacked GRU layers (stacked GRU)
+        #   dropout     : dropout rate between layers (0 if only 1 layer,
+        #                 because PyTorch requires dropout=0 when num_layers=1)
+        #   batch_first = True : convention that the input has shape (batch, seq, feat)
+        #                 instead of (seq, batch, feat). This is more intuitive
+        #                 and matches how we organize the data.
+        # FC Head (Fully Connected Head): a linear layer mapping
+        # the hidden state (hidden_dim dimensions) -> 1 predicted value.
+        # Example: if hidden_dim = 64, this layer has:
+        #   - Weight matrix W: shape (1, 64) -> 64 parameters
+        #   - Bias b: shape (1) -> 1 parameter
+        #   - Total: 65 learnable parameters
+        # This layer is applied SEPARATELY at each time step but
+        # uses the SAME weights (weight sharing), helping the model be consistent
+        # and reducing the number of parameters to learn.
+        """Forward pass - computes the prediction from the input.
+        This is the function PyTorch calls automatically when we write model(x).
+        It describes HOW data flows through the model from input to output.
+            x: Input tensor, shape (batch_size, seq_len, input_dim).
+               Each element x[i, t, :] is the feature vector of sequence i
+               at time step t.
+            Prediction tensor, shape (batch_size, seq_len).
+            Each element output[i, t] is the predicted shrinkage value of sequence
+            i at time step t.
+        # Step 1: Pass the sequence through GRU
+        # self.gru(x) returns a tuple of 2 parts:
+        #   - hidden: (batch, seq_len, hidden_dim) - the hidden state AT EVERY step
+        #             This is the "short-term memory" containing accumulated information from the
+        #             start of the sequence to the current step.
+        #   - _     : (num_layers, batch, hidden_dim) - the final hidden state
+        #             of each GRU layer. We don't need this value so it's assigned to _.
+        # Step 2: Map the hidden state -> predicted value via the FC head
+        #   The Linear layer applies a matrix multiplication + bias to each hidden vector.
+        # .squeeze(-1): removes the last dimension (the dimension with size=1)
+        #   Result: each time step has exactly 1 predicted value.
+    """Builds a GRU model from the hyperparameters suggested by Optuna.
+    This function is the "bridge" between Optuna (hyperparameter search) and the model architecture.
+    Every time Optuna tries a new parameter set, this function is called to create the
+    corresponding model, which is then trained and evaluated.
+        input_dim: Number of input features (automatically determined from the data).
+        params:    Dict containing the hyperparameters suggested by suggest_params().
+                   Must contain: hidden_dim, num_layers, dropout.
+        nn.Module: A GRURegressor instance ready for training.
+        hidden_dim=int(params["hidden_dim"]),   # Cast to int since Optuna may return a float
+        num_layers=int(params["num_layers"]),    # Number of GRU layers (1 or 2)
+        dropout=float(params["dropout"]),        # Dropout rate (0.05 to 0.30)
+    """Defines the hyperparameter search space for Optuna.
+    Optuna calls this function every trial (attempt) to get a new parameter set.
+    Each parameter is chosen from a reasonable value range, and Optuna will gradually
+    focus on the region that gives the best results (Bayesian optimization).
+    Search space:
+        Hidden state size. Chosen from 3 fixed values instead of a continuous range
+        to reduce the search space. 32 = lightest, 64 = most powerful.
+        For shrinkage data (not overly complex pattern), 32-64 is usually enough.
+    num_layers (int: 1 to 2):
+        Number of stacked GRU layers. 1 layer = simple, fast. 2 layers = learn deeper
+        representations but slower and more prone to overfitting.
+        3+ layers is not tried because shrinkage data is usually not large/complex enough.
+    dropout (float: 0.05 to 0.30):
+        Fraction of neurons randomly "disabled" during training. Helps fight overfitting.
+        0.05 = light regularization, 0.30 = strong regularization.
+        Only has an effect when num_layers > 1.
+    lr (float: 1e-4 to 3e-3, log scale):
+        Learning rate - learning speed. The MOST IMPORTANT parameter affecting the
+        training process. Log scale because the optimal learning rate is usually
+        distributed logarithmically (1e-4 and 1e-3 are "as far apart" as 1e-3 and 1e-2).
+    wd (float: 1e-7 to 1e-3, log scale):
+        Weight decay - L2 regularization penalty coefficient. Prevents weights from growing too large,
+        helping the model generalize better. Log scale for the same reason as lr.
+        trial: Optuna trial object, provides suggest_* methods
+               to choose parameter values.
+        dict: A hyperparameter set for one trial.
+    print(f"[{MODEL_NAME}] STEP 1/3: Prepare sequence-shaped data (filter + feature engineering)")
+    print(f"[{MODEL_NAME}] STEP 2/3: Holdout (train/val/test once by GID, Optuna 3 trials)")
+    print(f"[{MODEL_NAME}] STEP 3/3: Group K-Fold ({N_SPLITS} fold, Optuna {N_TRIALS_KFOLD} trials)")

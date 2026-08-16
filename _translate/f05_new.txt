@@ -1,0 +1,440 @@
+"""File gop - 05_tabnet.py
+goc: buoc_06_tabnet.py, cong voi pipeline dung chung common_tabular.py,
+  2. Dinh nghia kien truc mo hinh + khong gian sieu tham so Optuna - tu buoc_06_tabnet.py.
+duoc ghi vao thu muc an _cache/tabnet/ de cac file tong hop phia sau (12, 13) co the
+Chay: python 05_tabnet.py
+    te = regression_metrics(y_test_raw, pred_test_raw)
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+# PHAN 3/4 - KIEN TRUC MO HINH + SEARCH SPACE (gop tu buoc_06_tabnet.py)
+Bước 06 - Mô hình TabNet (Tabular Attention Network)
+Tên đầy đủ: TabNet - Attentive Interpretable Tabular Learning
+Tác giả gốc: Sercan Arik & Tomas Pfister (Google Cloud AI, 2019)
+Tập tin này cài đặt lại kiến trúc TabNet hoàn toàn bằng PyTorch thuần túy,
+KHÔNG cần cài thêm thư viện pytorch_tabnet bên ngoài. Mục đích là để người đọc
+có thể hiểu rõ từng chi tiết bên trong mô hình.
+KIẾN TRÚC TỔNG QUAN (pipeline xử lý dữ liệu từ đầu đến cuối):
+  Đầu vào: tensor (batch_size, số_features)
+  [1] BatchNorm1d đầu vào
+      - Chuẩn hóa (normalize) tất cả các features về cùng một thang đo
+      - Giúp mô hình hội tụ nhanh hơn và ổn định hơn khi huấn luyện
+      - Mỗi feature được trừ đi trung bình và chia cho độ lệch chuẩn
+  [2] Lặp qua N bước (steps) tuần tự, mỗi bước gồm 3 phần:
+      |   (a) Attention Mask - Cơ chế tự chọn feature:
+      |       - Nhận thông tin attention từ bước trước (prev_attention)
+      |       - Qua một lớp Fully Connected (FC) rồi BatchNorm
+      |       - Nhân với prior_scales (bộ nhớ ghi lại feature nào đã được
+      |         chọn ở các bước trước) để khuyến khích mô hình chọn
+      |         feature MỚI thay vì lặp lại feature cũ
+      |       - Áp dụng softmax để ra xác suất (tổng = 1), cho biết
+      |         mỗi feature quan trọng bao nhiêu phần trăm ở bước này
+      |       - Nhân attention mask với features gốc (element-wise)
+      |       - Kết quả: chỉ giữ lại (hoặc nhấn mạnh) các features
+      |         mà mô hình cho là quan trọng nhất ở bước hiện tại
+      |       - Các features không quan trọng bị giảm về gần 0
+      |   (c) Feature Transform - Trích xuất đặc trưng:
+      |       - Đưa masked features qua 2 tầng GLU (Gated Linear Unit)
+      |         nối tiếp nhau: tầng shared (dùng chung) và tầng riêng
+      |       - Output được chia thành 2 phần:
+      |           * n_d chiều đầu: qua ReLU, dùng cho dự đoán cuối cùng
+      |           * n_a chiều sau: dùng làm attention cho bước tiếp theo
+      |       - Cập nhật prior_scales: giảm trọng số của feature đã chọn
+      |         bằng công thức prior_new = prior_old * (1 - mask)
+      |   => Output mỗi bước (n_d chiều) được CỘNG TÍCH LŨY vào biến
+      |      aggregated, tương tự residual connection trong ResNet
+      - Tắt ngẫu nhiên một tỷ lệ neuron trong quá trình huấn luyện
+      - Giúp chống overfitting (mô hình học thuộc lòng dữ liệu train)
+  [4] Fully Connected head (lớp cuối cùng)
+      - Biến đổi vector aggregated (n_d chiều) thành 1 giá trị dự đoán
+      - Đầu ra: tensor (batch_size, 1) - giá trị hồi quy cho mỗi mẫu
+  Đầu ra: tensor (batch_size, 1) - giá trị dự đoán
+GIẢI THÍCH CƠ CHẾ ATTENTION (SEQUENTIAL ATTENTION):
+Attention trong TabNet khác với Transformer:
+- Transformer attention: mỗi phần tử "nhìn" vào TẤT CẢ các phần tử khác
+  trong chuỗi, dùng cho dữ liệu có thứ tự (văn bản, ảnh).
+- TabNet attention: mô hình chọn CỘT NÀO (feature nào) quan trọng nhất
+  tại MỖI BƯỚC xử lý, dùng cho dữ liệu dạng bảng (tabular).
+Quy trình attention tuần tự (sequential):
+  Bước 1: prior_scales = [1, 1, 1, ..., 1] (tất cả feature đều sẵn sàng)
+          -> Attention mask chọn ra, ví dụ feature 3 và 7 quan trọng nhất
+          -> prior_scales giảm ở vị trí 3 và 7
+  Bước 2: prior_scales = [1, 1, 0.2, 1, 1, 1, 1, 0.3, ...]
+          -> Feature 3 và 7 ít có cơ hội được chọn lại
+          -> Mô hình buộc phải khám phá feature khác (ví dụ feature 1 và 5)
+  Bước 3: tiếp tục tương tự...
+Nhờ cơ chế này, mỗi bước "nhìn" vào một TẬP FEATURE KHÁC NHAU, giúp mô hình
+khai thác đa dạng thông tin từ dữ liệu thay vì chỉ tập trung vào vài feature.
+GIẢI THÍCH GATED LINEAR UNIT (GLU):
+GLU là một kỹ thuật biến đổi phi tuyến (non-linear transformation):
+  - Input: vector x có kích thước in_dim
+  - Qua một lớp FC ra vector h có kích thước 2 * out_dim
+  - Chia h thành 2 nửa bằng nhau:
+      * Nửa trái (value): chứa thông tin cần giữ lại
+      * Nửa phải (gate): qua sigmoid -> giá trị từ 0 đến 1
+      * Gate gần 1: thông tin được giữ nguyên (cổng "mở")
+      * Gate gần 0: thông tin bị chặn lại (cổng "đóng")
+Lợi ích của GLU so với ReLU đơn thuần:
+  - Mô hình TỰ HỌC cách lọc thông tin (cổng nào mở, cổng nào đóng)
+  - Gradient (đạo hàm) không bị "chết" như ReLU khi giá trị âm
+  - Thường cho kết quả tốt hơn trên dữ liệu dạng bảng
+TẠI SAO TABNET TỰ CHỌN FEATURE (INTERPRETABILITY):
+Trong các mô hình truyền thống (ví dụ Random Forest), ta cần dùng kỹ thuật
+bên ngoài (permutation importance, SHAP) để biết feature nào quan trọng.
+TabNet có SẴN cơ chế này qua attention mask:
+  - Mỗi bước tạo ra một mask (vector xác suất, tổng = 1)
+  - Mask trực tiếp cho biết: "ở bước này, feature X chiếm 40%, feature Y
+    chiếm 25%, ..." -> Ta có thể trực quan hóa và giải thích mô hình
+  - Tổng hợp mask từ tất cả bước -> feature importance tổng thể
+  - Đây gọi là "interpretable by design" (có thể giải thích từ thiết kế)
+SO SÁNH VỚI MLP (Multi-Layer Perceptron) VÀ TRANSFORMER:
+MLP (Fully Connected thông thường):
+  - Dùng TẤT CẢ features cùng lúc ở mọi lớp, không chọn lọc
+  - Không có cơ chế giải thích (feature importance) tích hợp sẵn
+  - Đơn giản, nhanh, nhưng có thể bỏ lỡ các mối quan hệ phức tạp
+  - Dễ overfit khi có nhiều features không liên quan (noisy features)
+  - Attention giữa các PHẦN TỬ trong chuỗi (sequence), không phải giữa
+    các features dạng cột
+  - Rất mạnh cho dữ liệu có thứ tự (NLP, vision), nhưng cho dữ liệu
+    tabular thì chưa chắc vượt trội hơn TabNet hay tree-based models
+  - Yêu cầu nhiều dữ liệu hơn để huấn luyện hiệu quả
+  - Chọn lọc feature TỪNG BƯỚC (sparse attention), chỉ "nhìn" vào
+    một vài feature quan trọng nhất mỗi lần
+  - Có khả năng giải thích tích hợp sẵn (attention mask)
+  - Hiệu quả trên dữ liệu tabular trung bình đến lớn
+  - Cạnh tranh được với XGBoost/LightGBM trên nhiều bài toán
+CÁCH TỐI ƯU (HYPERPARAMETER TUNING):
+Các siêu tham số (hyperparameters) quan trọng nhất của TabNet:
+  - n_d (decision dimension): kích thước vector dự đoán mỗi bước
+      * Lớn hơn -> mô hình có nhiều "bộ nhớ" hơn, mạnh hơn
+      * Nhưng quá lớn -> dễ overfit, chậm hơn
+      * Thường nằm trong khoảng 8 đến 64
+  - n_a (attention dimension): kích thước vector attention mỗi bước
+      * Thường đặt bằng n_d (như paper gốc khuyến nghị)
+  - n_steps: số bước xử lý tuần tự
+      * Nhiều bước -> mô hình "nhìn" nhiều nhóm feature hơn
+      * Nhưng quá nhiều bước -> chậm hơn, dễ overfit
+      * Thường từ 3 đến 7 bước
+  - learning_rate: tốc độ học, ảnh hưởng đến tốc độ hội tụ
+  - weight_decay: hệ số phạt L2, giúp regularization
+  - dropout: tỷ lệ neuron bị tắt ngẫu nhiên khi train
+Trong file này, Optuna (thư viện tối ưu siêu tham số) sẽ tự động thử
+nhiều tổ hợp khác nhau và chọn ra bộ tham số tốt nhất dựa trên kết quả
+trên tập validation.
+ƯU ĐIỂM VÀ NHƯỢC ĐIỂM:
+Ưu điểm:
+  + Tự động chọn feature quan trọng (feature selection tích hợp)
+  + Có khả năng giải thích tốt (interpretable) qua attention mask
+  + Xử lý tốt dữ liệu tabular với nhiều features
+  + Không cần feature engineering thủ công phức tạp
+  + Có thể cạnh tranh với gradient boosting (XGBoost, LightGBM)
+Nhược điểm:
+  - Chậm hơn đáng kể so với XGBoost/LightGBM khi huấn luyện
+  - Yêu cầu nhiều dữ liệu hơn tree-based models để đạt hiệu quả tốt
+  - Nhạy cảm với việc chọn hyperparameters (cần tuning cẩn thận)
+  - Kiến trúc phức tạp hơn MLP đơn giản
+  - Với tập dữ liệu nhỏ (< vài nghìn mẫu), có thể thua tree-based models
+CÁCH CHẠY:
+Chạy độc lập (benchmark riêng cho TabNet):
+Chạy cùng tất cả mô hình khác:
+# KIẾN TRÚC TABNET (CÀI ĐẶT BẰNG PYTORCH THUẦN TÚY)
+# Gồm 3 class chính:
+#   1. GLUBlock    - Khối Gated Linear Unit (biến đổi phi tuyến có cổng lọc)
+#   2. TabNetStep  - Một bước xử lý của TabNet (attention + feature transform)
+#   3. SimpleTabNet - Mô hình TabNet hoàn chỉnh (gộp N bước + head dự đoán)
+    GLUBlock - Khối Gated Linear Unit (Đơn vị Tuyến tính có Cổng).
+    Đây là thành phần cơ bản nhất trong phần Feature Transform của TabNet.
+    GLU cho phép mô hình TỰ HỌC cách lọc thông tin: mỗi chiều (dimension)
+    của output có một "cổng" (gate) quyết định bao nhiêu thông tin được
+    đi qua (giá trị từ 0 = chặn hoàn toàn, đến 1 = cho qua hoàn toàn).
+    Nguyên lý hoạt động chi tiết:
+        1. Input x có kích thước (batch_size, in_dim)
+        2. Qua lớp FC (Fully Connected), ra tensor kích thước (batch_size, 2 * out_dim)
+        3. Qua BatchNorm để chuẩn hóa
+        4. Chia đôi tensor thành 2 phần, mỗi phần kích thước (batch_size, out_dim):
+           - Nửa trái = "value" (giá trị thực sự cần truyền đi)
+           - Nửa phải = "gate" (cổng kiểm soát), đưa qua hàm sigmoid
+           - Nơi nào gate gần 1 (sigmoid > 0.5): thông tin được giữ lại
+           - Nơi nào gate gần 0 (sigmoid < 0.5): thông tin bị chặn
+        in_dim  (int): Số chiều đầu vào. Ví dụ: 64 (từ masked features hoặc tầng trước)
+        out_dim (int): Số chiều đầu ra mong muốn. Ví dụ: 48 (= n_d + n_a)
+    Kích thước tensor qua từng bước (forward pass):
+        Sau FC (self.fc):       (batch_size, 2 * out_dim)  -- FC ra gấp đôi để chia
+        Sau BatchNorm (self.bn):(batch_size, 2 * out_dim)  -- chuẩn hóa, giữ nguyên shape
+        Sau chunk (value):      (batch_size, out_dim)       -- nửa đầu tiên
+        Sau chunk (gate):       (batch_size, out_dim)       -- nửa còn lại
+        Output (value * σ(gate)): (batch_size, out_dim)     -- element-wise multiply
+        # Lớp Fully Connected (kết nối đầy đủ): biến đổi từ in_dim chiều sang 2*out_dim chiều.
+        # Lý do ra 2*out_dim: ta cần chia đôi output thành 2 phần bằng nhau (value và gate),
+        # mỗi phần có kích thước out_dim. Nếu chỉ ra out_dim thì sau khi chia đôi, mỗi phần
+        # chỉ còn out_dim/2 chiều, quá nhỏ.
+        # BatchNorm1d: chuẩn hóa output theo từng batch (trung bình = 0, phương sai = 1).
+        # Giúp ổn định gradient trong quá trình lan truyền ngược (backpropagation),
+        # tránh hiện tượng gradient quá lớn (exploding) hoặc quá nhỏ (vanishing).
+        Lan truyền thuận (forward pass) qua khối GLU.
+        Tham số:
+            x (Tensor): Tensor đầu vào, kích thước (batch_size, in_dim).
+                         Mỗi hàng là một mẫu dữ liệu, mỗi cột là một chiều đặc trưng.
+        Trả về:
+            Tensor kích thước (batch_size, out_dim): kết quả sau khi lọc qua cổng.
+                   Chỉ giữ lại thông tin mà mô hình cho là quan trọng.
+        # Bước 1: Đưa input qua FC rồi BatchNorm
+        # FC biến đổi tuyến tính: h = x @ W^T + b, kích thước (batch, 2*out_dim)
+        # BatchNorm chuẩn hóa h theo chiều batch (chiều 0)
+        # Bước 2: Chia tensor h thành 2 phần bằng nhau theo chiều cuối cùng (dim=-1)
+        # chunk(2, dim=-1) cắt tensor thành 2 mảnh dọc theo chiều feature:
+        #   - value: (batch, out_dim) - chứa thông tin gốc cần truyền đi
+        #   - gate:  (batch, out_dim) - cổng kiểm soát, sẽ qua sigmoid
+        # Bước 3: Áp dụng cơ chế cổng (gating mechanism)
+        # sigmoid(gate): nén giá trị gate vào khoảng [0, 1]
+        #   - Giá trị gần 1: "cổng mở", thông tin ở value được giữ nguyên
+        #   - Giá trị gần 0: "cổng đóng", thông tin ở value bị triệt tiêu
+        # Phép nhân element-wise (*): mỗi phần tử value nhân với cổng tương ứng
+    TabNetStep - Một bước (step) trong chuỗi xử lý tuần tự của TabNet.
+    Mỗi bước thực hiện 3 nhiệm vụ chính:
+        1. Tính Attention Mask: xác định feature nào quan trọng nhất ở bước này
+        2. Áp dụng mask lên features gốc: chỉ giữ lại thông tin được chọn
+        3. Feature Transform: trích xuất đặc trưng qua 2 tầng GLU nối tiếp
+    Cơ chế hoạt động chi tiết:
+        - Nhận prev_attention (output attention từ bước trước) và prior_scales
+          (bộ nhớ theo dõi feature nào đã được chọn ở các bước trước)
+        - Tính attention mask mới bằng cách: FC -> BN -> nhân prior_scales -> softmax
+        - prior_scales giúp mô hình KHÔNG chọn lại feature đã chọn:
+            * Feature đã chọn nhiều -> prior giảm -> softmax cho xác suất thấp
+            * Feature chưa chọn -> prior vẫn cao -> có cơ hội được chọn
+        - Masked features = mask * features gốc (element-wise multiply)
+        - Qua 2 tầng GLU: shared (chia sẻ tham số giữa các bước nếu cần)
+          và step (riêng cho mỗi bước)
+        - Output chia thành: n_d chiều cho dự đoán + n_a chiều cho attention bước sau
+        in_dim (int): Số lượng features đầu vào (= số cột trong dữ liệu gốc).
+                      Ví dụ: 50 nếu dữ liệu có 50 features.
+        n_d    (int): Số chiều cho decision (dự đoán). Lớn hơn = mô hình mạnh hơn
+                      nhưng cũng dễ overfit hơn. Thường từ 8 đến 64.
+        n_a    (int): Số chiều cho attention. Quyết định khả năng mô hình nhớ
+                      thông tin attention giữa các bước. Thường đặt = n_d.
+            x              : (batch_size, in_dim)   - features đã được BatchNorm
+            prior_scales   : (batch_size, in_dim)   - prior cho attention
+            prev_attention : (batch_size, n_a)       - output attention bước trước
+        Xử lý bên trong:
+            softmax(mask)  : (batch_size, in_dim)   - xác suất chọn feature
+            masked_features: (batch_size, in_dim)   - features được lọc
+            step_output    : (batch_size, n_d)       - đặc trưng cho dự đoán
+            new_attention  : (batch_size, n_a)        - attention cho bước tiếp
+            new_prior      : (batch_size, in_dim)     - prior đã cập nhật
+        # Lưu lại n_d để dùng khi chia output ở forward()
+        # n_d = chiều output cho dự đoán (decision dimension)
+        # n_a = chiều output cho attention bước tiếp theo (attention dimension)
+        # --- Phần Attention ---
+        # Lớp FC: biến đổi vector attention (n_a chiều) thành vector có in_dim chiều
+        # để tạo ra mask có CÙNG SỐ CHIỀU với features đầu vào.
+        # Điều này cần thiết vì mask sẽ nhân element-wise với features (in_dim chiều).
+        # BatchNorm cho attention: chuẩn hóa để ổn định quá trình huấn luyện
+        # --- Phần Feature Transform ---
+        # Tầng GLU thứ nhất (shared): nhận masked features (in_dim chiều)
+        # và biến đổi thành vector (n_d + n_a) chiều.
+        # Gọi là "shared" vì trong paper gốc, tầng này có thể CHIA SẺ tham số
+        # giữa các bước khác nhau (ở đây mỗi bước có bản riêng cho đơn giản).
+        # Tầng GLU thứ hai (step-specific): nhận output tầng shared
+        # và tiếp tục trích xuất đặc trưng. Tầng này RIÊNG cho mỗi bước,
+        # giúp mỗi bước có khả năng biến đổi khác nhau.
+        # Lưu n_d để biết vị trí cắt output (n_d chiều đầu cho dự đoán,
+        # phần còn lại cho attention)
+        Lan truyền thuận (forward pass) qua một bước TabNet.
+            x (Tensor):              Features đã được chuẩn hóa bởi BatchNorm đầu vào.
+                                     Kích thước (batch_size, in_dim).
+                                     Đây là features GỐC, không thay đổi qua các bước.
+                                     Mỗi bước đều nhận cùng x nhưng chọn feature khác nhau.
+            prior_scales (Tensor):   Bộ nhớ theo dõi feature nào đã được chọn.
+                                     Ban đầu tất cả = 1.0 (chưa feature nào được chọn).
+                                     Sau mỗi bước, vị trí đã chọn bị giảm xuống.
+                                     Ví dụ: [1.0, 0.3, 1.0, 0.1, ...] nghĩa là feature 1
+                                     và feature 3 đã bị chọn nhiều (giá trị nhỏ).
+            prev_attention (Tensor): Output attention từ bước trước (hoặc vector 0 nếu
+                                     là bước đầu tiên). Kích thước (batch_size, n_a).
+                                     Chứa thông tin mà mô hình đã học được ở bước trước,
+                                     dùng để quyết định bước này nên chọn feature nào.
+        Trả về (tuple gồm 3 tensor):
+            step_output (Tensor):    Đặc trưng dùng cho dự đoán cuối cùng.
+                                     Kích thước (batch_size, n_d).
+                                     Sẽ được cộng tích lũy vào biến aggregated.
+            new_attention (Tensor):  Thông tin attention cho bước tiếp theo.
+                                     Kích thước (batch_size, n_a).
+                                     Chuyển tiếp "kiến thức" sang bước sau.
+            new_prior (Tensor):      Prior scales đã cập nhật.
+                                     Feature vừa chọn sẽ có prior thấp hơn.
+        # BƯỚC 1: Tính Attention Mask - Quyết định feature nào quan trọng nhất
+        # Đưa prev_attention (n_a chiều) qua FC để ra vector in_dim chiều,
+        # rồi qua BatchNorm để chuẩn hóa. Kết quả attn_logits là "điểm số thô"
+        # (raw score) cho mỗi feature, chưa phải xác suất.
+        # Nhân element-wise với prior_scales: feature đã được chọn nhiều ở các
+        # bước trước sẽ có prior nhỏ -> điểm số giảm -> ít cơ hội được chọn lại.
+        # Đây là cơ chế "entropy-based sparsity" khuyến khích mô hình khám phá
+        # các feature mới thay vì lặp lại những feature cũ.
+        # Softmax biến điểm số thô thành xác suất (tổng theo chiều feature = 1).
+        # Mask cho biết phần trăm "sự chú ý" mà mô hình dành cho mỗi feature.
+        # Ví dụ: mask = [0.01, 0.40, 0.05, 0.30, ...] nghĩa là feature 1 chiếm
+        # 40% sự chú ý, feature 3 chiếm 30%, các feature khác ít hơn.
+        # BƯỚC 2: Áp dụng mask lên features gốc - Lọc thông tin quan trọng
+        # Nhân element-wise: masked_features = mask * x
+        # Feature có mask cao (gần 1) được giữ nguyên giá trị -> "quan trọng"
+        # Feature có mask thấp (gần 0) bị triệt tiêu gần về 0 -> "không quan trọng"
+        # Kết quả: mô hình chỉ "nhìn" vào một vài feature được chọn ở bước này
+        # BƯỚC 3: Feature Transform - Trích xuất đặc trưng qua 2 tầng GLU
+        # Tầng GLU shared: biến đổi masked_features từ in_dim chiều
+        # thành (n_d + n_a) chiều. GLU tự học cách lọc thông tin qua cổng.
+        # Tầng GLU riêng cho bước này: tiếp tục tinh chỉnh đặc trưng.
+        # Hai tầng GLU nối tiếp tăng khả năng biểu diễn (expressiveness)
+        # của mô hình, tương tự việc xếp nhiều lớp trong MLP.
+        # BƯỚC 4: Chia output và cập nhật prior
+        # Chia tensor h (n_d + n_a chiều) thành 2 phần:
+        # - n_d chiều đầu tiên: qua ReLU -> dùng cho dự đoán cuối cùng
+        #   ReLU(x) = max(0, x): giữ giá trị dương, đặt giá trị âm về 0
+        # - n_a chiều còn lại: dùng làm input attention cho bước tiếp theo
+        #   Không qua ReLU vì attention cần cả giá trị âm (âm -> ít quan trọng)
+        # Cập nhật prior_scales: giảm trọng số của feature vừa được chọn
+        # Công thức: new_prior = prior_old * (1 - mask)
+        #   - Feature được chọn (mask gần 1): (1 - mask) gần 0 -> prior giảm mạnh
+        #   - Feature không chọn (mask gần 0): (1 - mask) gần 1 -> prior giữ nguyên
+        # Hiệu ứng tích lũy: feature bị chọn liên tục sẽ có prior ngày càng nhỏ,
+        # buộc mô hình phải "nhìn" sang feature khác ở các bước sau.
+    SimpleTabNet - Mô hình TabNet hoàn chỉnh, viết bằng PyTorch thuần túy.
+    Đây là class chính gộp tất cả thành phần lại thành một mô hình end-to-end
+    (từ đầu vào đến đầu ra dự đoán). Quy trình xử lý:
+        BatchNorm đầu vào  --  chuẩn hóa tất cả features
+        Khởi tạo: prior_scales = 1 (chưa chọn feature nào)
+                   prev_attention = 0 (không có attention trước đó)
+                   aggregated = 0 (chưa tích lũy output nào)
+        Vòng lặp qua N bước (steps):
+           |  Mỗi bước: attention mask -> masked features -> 2 tầng GLU
+           |  -> step_output (n_d chiều) được CỘNG vào aggregated
+           |  -> cập nhật prev_attention và prior_scales cho bước sau
+        Dropout  --  tắt ngẫu nhiên neuron để chống overfit
+        FC head (n_d -> 1)  --  cho ra 1 giá trị dự đoán
+        in_dim  (int):   Số lượng features đầu vào (= số cột dữ liệu sau tiền xử lý).
+                         Ví dụ: 50 nếu dữ liệu có 50 features.
+        n_d     (int):   Chiều decision (dự đoán) mỗi bước. Quyết định "bộ nhớ"
+                         của mô hình tại mỗi bước. Lớn hơn = mạnh hơn nhưng chậm hơn.
+                         Phạm vi thường dùng: 8 - 64.
+        n_a     (int):   Chiều attention mỗi bước. Quyết định khả năng truyền thông tin
+                         attention giữa các bước. Paper gốc khuyến nghị n_a = n_d.
+        n_steps (int):   Số bước xử lý tuần tự. Mỗi bước "nhìn" vào một nhóm feature
+                         khác nhau. Nhiều bước -> khai thác nhiều feature hơn nhưng chậm hơn.
+                         Phạm vi thường dùng: 3 - 7.
+        dropout (float): Tỷ lệ neuron bị tắt ngẫu nhiên khi huấn luyện (0.0 đến 1.0).
+                         Giúp chống overfitting. Ví dụ: 0.1 nghĩa là tắt 10% neuron.
+                         Phạm vi thường dùng: 0.0 - 0.3.
+        Sau input_bn:      (batch_size, in_dim)    - đã chuẩn hóa
+        prior_scales:      (batch_size, in_dim)    - khởi tạo toàn 1
+        prev_attention:    (batch_size, n_a)         - khởi tạo toàn 0
+        aggregated:        (batch_size, n_d)         - khởi tạo toàn 0
+        Sau mỗi step:     aggregated += step_output  (batch_size, n_d)
+        Sau dropout:       (batch_size, n_d)         - một số giá trị bị đặt về 0
+        Sau head (FC):     (batch_size, 1)           - giá trị dự đoán cuối cùng
+        # Lưu lại các tham số để dùng trong forward()
+        self.in_dim = in_dim      # Số features đầu vào
+        self.n_a = n_a            # Chiều attention (cần khi khởi tạo prev_attention)
+        self.n_steps = n_steps    # Số bước xử lý (để biết vòng lặp chạy bao nhiêu lần)
+        # BatchNorm đầu vào: chuẩn hóa TẤT CẢ features về cùng thang đo.
+        # Rất quan trọng vì các features có thể có đơn vị khác nhau:
+        # ví dụ tuổi (0-100) vs thu nhập (0-1000000). Nếu không chuẩn hóa,
+        # features có giá trị lớn sẽ "lấn át" features có giá trị nhỏ.
+        # Tạo danh sách N bước xử lý (TabNetStep).
+        # nn.ModuleList giống list Python nhưng PyTorch sẽ theo dõi tham số
+        # của tất cả module bên trong (cần thiết cho optimizer và GPU).
+        # Mỗi bước có bộ tham số RIÊNG (FC attention, 2 tầng GLU), cho phép
+        # mỗi bước học cách chọn feature và biến đổi đặc trưng khác nhau.
+        # Dropout: trong quá trình huấn luyện, tắt ngẫu nhiên một tỷ lệ neuron.
+        # Mục đích: buộc mô hình không phụ thuộc quá nhiều vào bất kỳ neuron nào,
+        # giúp tổng quát hóa (generalize) tốt hơn trên dữ liệu chưa thấy.
+        # Khi đánh giá (eval mode), dropout tự động tắt, tất cả neuron được dùng.
+        # Lớp FC cuối cùng (head): biến đổi vector tích lũy (n_d chiều)
+        # thành 1 giá trị dự đoán. Đây là lớp hồi quy (regression head).
+        # n_d -> 1: mỗi mẫu cho ra đúng 1 con số dự đoán.
+        Lan truyền thuận (forward pass) qua toàn bộ mô hình TabNet.
+            x (Tensor): Dữ liệu đầu vào, kích thước (batch_size, in_dim).
+                         Mỗi hàng là một mẫu dữ liệu (data point).
+                         Mỗi cột là một feature (đặc trưng).
+                         Ví dụ: batch_size=32 mẫu, in_dim=50 features.
+            Tensor kích thước (batch_size, 1): giá trị dự đoán hồi quy cho mỗi mẫu.
+                   Ví dụ: dự đoán giá nhà, doanh thu, v.v.
+        # Bước 1: Chuẩn hóa tất cả features đầu vào bằng BatchNorm.
+        # Sau bước này, mỗi feature có trung bình gần 0 và phương sai gần 1.
+        # Bước 2: Khởi tạo các biến trạng thái cho vòng lặp qua N bước.
+        # prior_scales: bộ nhớ theo dõi feature nào đã được chọn.
+        # Khởi tạo toàn 1 nghĩa là: "tất cả features đều sẵn sàng được chọn".
+        # Kích thước: (batch_size, in_dim) - mỗi mẫu có bộ prior riêng.
+        # prev_attention: output attention từ bước trước (bước đầu = vector 0).
+        # Khởi tạo toàn 0 nghĩa là: "chưa có thông tin attention nào từ trước".
+        # Kích thước: (batch_size, n_a).
+        # aggregated: biến tích lũy output dự đoán từ tất cả bước.
+        # Sau mỗi bước, step_output (n_d chiều) sẽ được CỘNG vào đây.
+        # Tương tự residual connection: thông tin từ mọi bước đều đóng góp
+        # vào dự đoán cuối cùng, giúp gradient lan truyền tốt hơn.
+        # Kích thước: (batch_size, n_d).
+        # Bước 3: Lặp qua N bước (steps) tuần tự.
+        # Mỗi bước nhận CÙNG features gốc x (đã BatchNorm) nhưng chọn feature khác nhau
+        # nhờ cơ chế attention mask + prior_scales.
+            # Gọi forward() của TabNetStep:
+            #   - step_out: (batch, n_d) - đặc trưng dự đoán từ bước này
+            #   - prev_attention: (batch, n_a) - attention cho bước tiếp (được cập nhật)
+            #   - prior_scales: (batch, in_dim) - prior đã cập nhật (feature đã chọn bị giảm)
+            # Cộng tích lũy: mỗi bước đóng góp thêm thông tin vào vector dự đoán.
+            # Sau N bước, aggregated chứa tổng hợp đặc trưng từ tất cả các bước.
+        # Bước 4: Áp dụng dropout lên vector tích lũy.
+        # Tắt ngẫu nhiên một số neuron (chỉ khi train, không ảnh hưởng khi eval).
+        # Bước 5: Đưa qua lớp FC cuối cùng (head) để ra 1 giá trị dự đoán.
+        # head: Linear(n_d, 1) -> output kích thước (batch_size, 1)
+# KHÔNG GIAN TÌM KIẾM SIÊU THAM SỐ (HYPERPARAMETER SEARCH SPACE)
+# Hàm này định nghĩa PHẠM VI các giá trị mà Optuna sẽ thử cho mỗi siêu tham số.
+# Optuna dùng thuật toán Bayesian optimization (cụ thể là TPE - Tree-structured
+# Parzen Estimator) để thông minh chọn tổ hợp tiếp theo dựa trên kết quả
+# các lần thử trước, thay vì thử ngẫu nhiên (random search).
+    Định nghĩa không gian tìm kiếm siêu tham số cho Optuna.
+    Optuna sẽ gọi hàm này MỖI LẦN thử một tổ hợp tham số mới (mỗi "trial").
+    Hàm trả về một dictionary chứa các giá trị được chọn, Optuna sẽ dùng
+    kết quả validation để đánh giá tổ hợp này tốt hay xấu.
+        trial (optuna.Trial): Đối tượng trial của Optuna, cung cấp các phương thức
+                               suggest_* để lấy mẫu giá trị từ phạm vi cho trước.
+        dict[str, Any]: Dictionary chứa 5 siêu tham số đã được chọn:
+            - "lr":      learning rate (tốc độ học)
+            - "wd":      weight decay (hệ số phạt L2)
+            - "dropout": tỷ lệ dropout
+            - "n_d":     chiều decision (dự đoán)
+            - "n_steps": số bước xử lý
+        # Learning rate (tốc độ học): quyết định mỗi bước cập nhật tham số lớn hay nhỏ.
+        # log=True: lấy mẫu theo thang logarit (5e-4, 1e-3, 5e-3 đều có cơ hội ngang nhau).
+        # Lý do dùng log: learning rate thay đổi theo bậc (1e-4 vs 1e-3 khác nhau rất nhiều).
+        # Quá nhỏ -> học quá chậm, quá lớn -> mô hình dao động không hội tụ.
+        # Weight decay (phạt L2): thêm hệ số phạt vào loss dựa trên độ lớn của tham số.
+        # Giúp regularization: ngăn tham số quá lớn -> giảm overfit.
+        # Giá trị nhỏ (1e-6): gần như không phạt. Giá trị lớn (3e-4): phạt mạnh hơn.
+        # Dropout: tỷ lệ neuron bị tắt ngẫu nhiên mỗi lần forward (khi train).
+        # 0.05 = 5% neuron bị tắt, 0.30 = 30% neuron bị tắt.
+        # Dropout cao -> regularization mạnh hơn, nhưng quá cao -> mô hình yếu.
+        # n_d (decision dimension): kích thước vector dự đoán mỗi bước.
+        # Chọn từ danh sách cố định [16, 24, 32, 48] thay vì phạm vi liên tục.
+        # n_a (attention dimension) sẽ được đặt = n_d trong build_model().
+        # Giá trị nhỏ (16): mô hình nhẹ, nhanh, ít overfit.
+        # Giá trị lớn (48): mô hình mạnh hơn nhưng chậm hơn, dễ overfit hơn.
+        # n_steps: số bước xử lý tuần tự.
+        # Mỗi bước chọn một nhóm feature khác nhau qua attention mask.
+        # 3 bước: mô hình nhìn vào 3 nhóm feature -> đơn giản, nhanh.
+        # 6 bước: mô hình nhìn vào 6 nhóm feature -> phức tạp hơn, chậm hơn.
+    Tạo mô hình SimpleTabNet từ bộ siêu tham số đã cho.
+    Hàm này được gọi bởi pipeline benchmark (trong common_tabular.py) sau khi
+    Optuna chọn ra một tổ hợp siêu tham số. Hàm nhận in_dim (số features
+    trong dữ liệu) và params (dictionary siêu tham số) rồi trả về mô hình
+    PyTorch sẵn sàng huấn luyện.
+        in_dim (int):             Số lượng features đầu vào. Được tự động xác định
+                                  từ dữ liệu bởi pipeline benchmark.
+        params (dict[str, Any]):  Dictionary siêu tham số từ search_space().
+                                  Chứa: "n_d", "n_steps", "dropout" (và "lr", "wd"
+                                  dùng bởi optimizer, không dùng ở đây).
+        nn.Module: Mô hình SimpleTabNet đã khởi tạo, sẵn sàng huấn luyện.
+        n_d=int(params["n_d"]),          # Chiều decision: lấy từ tham số Optuna
+        n_a=int(params["n_d"]),          # Chiều attention = n_d (theo paper gốc khuyến nghị)
+        n_steps=int(params["n_steps"]),  # Số bước xử lý tuần tự
+        dropout=float(params["dropout"]),  # Tỷ lệ dropout
+# HÀM CHẠY BENCHMARK VÀ ENTRY POINT
+# Phần này kết nối mô hình TabNet với pipeline benchmark chung (common_tabular.py).
+# Pipeline chung xử lý: đọc dữ liệu, chia train/val/test, tối ưu siêu tham số
+# bằng Optuna, huấn luyện mô hình tốt nhất, đánh giá và lưu kết quả.

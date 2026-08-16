@@ -1,0 +1,91 @@
+"""File gop - 11_cong_thuc_kinh_nghiem.py
+File nay GOP LAI (khong bo sot) noi dung tu buoc_20_empirical_baseline.py
+(moc so sanh bang cong thuc vat ly kinh nghiem: ACI 209R-92, B3, B4, fib
+MC2010), cong voi buoc_01_code_loc_data.py de tu chuan bi du lieu.
+Khac voi cac file 01-10 (mo hinh hoc may can torch/Optuna), file nay CHI dung
+numpy/pandas de tinh cong thuc thiet ke hien hanh tren TUNG dong du lieu, roi
+cham diem R2/RMSE/MAE de doi chieu cong bang voi cac mo hinh hoc sau (buoc
+12_tong_hop_so_sanh.py se doc lai ket qua nay). Vi khong dung torch nen file
+nay KHONG can pipeline dung chung common_tabular.py/common_sequence_group.py.
+thay), va gom du 3 phan viec:
+  2. Dinh nghia 5 cong thuc kinh nghiem (ACI 209R-92, B3, B4, B4 chi kho, fib
+     MC2010) - tu buoc_20_empirical_baseline.py.
+  3. Tinh du doan cho tung dong, cham diem R2/RMSE/MAE ca ban chuan va ban
+     hieu chinh (nhan he so binh phuong toi thieu), tren toan bo du lieu VA
+     tren tap con seq_ok=1 (cung tap diem GRU/LSTM/TCN duoc cham OOF, de so
+     sanh cong bang), roi IN KET QUA ra man hinh console.
+Cac file CSV trung gian van duoc ghi vao thu muc an _cache/empirical/ de file
+tong hop phia sau (12_tong_hop_so_sanh.py) co the doc lai ma khong can tinh
+lai tu dau.
+Chay: python 11_cong_thuc_kinh_nghiem.py
+# PHAN 1/3 - CHUAN BI DU LIEU (gop tu buoc_01_code_loc_data.py)
+# Tu chua san "import numpy as np", "import pandas as pd", "from pathlib
+# import Path" - khong can torch nen khong can dat truoc TAB_ENGINE/SEQ_ENGINE.
+# PHAN 2/3 - 5 CONG THUC KINH NGHIEM (gop tu buoc_20_empirical_baseline.py)
+"""Bước 20 - Mốc so sánh công thức kinh nghiệm: ACI 209R-92, B3, B4, fib MC2010.
+Phản biện thường gặp nhất với bài học máy dự đoán co ngót: mô hình học sâu hơn
+công thức thiết kế hiện hành (ACI 209, B3, B4, fib MC2010) ở chỗ nào? Đây không
+phải mô hình ML, mà là công thức vật lý kinh nghiệm, nên dùng làm mốc so sánh
+không phá ràng buộc "chỉ dùng học sâu".
+Cách so sánh công bằng: tính từng công thức cho TỪNG dòng trong tập dữ liệu rồi
+chấm điểm R2/RMSE so với giá trị đo, đối chiếu với chỉ số gộp ngoài fold của các
+mô hình học sâu (mỗi GID đều được kiểm tra đúng một lần trong group 5-fold).
+Nguồn công thức (đã đối chiếu bản gốc, PDF lưu ở _tmp_refs/):
+  - ACI 209R-92: báo cáo ủy ban ACI 209.
+  - B3: Bažant & Baweja, ACI SP-194 / RILEM recommendation (chỉ co ngót khô).
+  - B4: RILEM TC-242-MDC, Mater Struct 48:753-770 (2015) — khô + tự sinh.
+  - fib MC2010: Eqs. 5.1-76..83 — cơ bản (tự sinh) + khô.
+Giả định trung thực (ghi rõ trong bài):
+  - Không có độ sụt/hàm lượng khí (ACI: hệ số = 1,0).
+  - Loại xi măng: B3 Type I (α1=1), B4 loại R, MC2010 lớp 42.5N; bảo dưỡng ẩm
+    (α2=1). Cốt liệu B4: k_τa = k_εa = 1,0 (không rõ loại đá gốc theo Bảng 6).
+  - w/c lấy bằng w/cm và c bằng tổng chất kết dính (SCC dùng nhiều SCM).
+  - Báo cáo hai biến thể mỗi công thức: (a) chuẩn; (b) hiệu chỉnh, nhân toàn bộ
+    với hệ số tối ưu bình phương tối thiểu trên dữ liệu (lợi thế tốt nhất có
+    thể cho công thức kinh nghiệm).
+Chạy:  python buoc_20_empirical_baseline.py --smoke    (kiểm tra 1 đường cong)
+       python buoc_20_empirical_baseline.py            (chạy toàn bộ)
+    """ACI 209R-92 ung suat co ngot (×10^-6) cho mot dong (mot moc thoi gian).
+    eps_shu = 780e-6 * gamma_sh, gamma_sh = tich cac he so hieu chinh.
+    dt = float(row["dt_days"])           # thoi gian kho t - tc (ngay)
+    tc = float(row["t0"])                # tuoi bat dau kho (ngay)
+    # Thoi gian: f = 35 cho duong am 7 ngay (gia tri chuan ACI)
+    # He so duong am theo thoi gian bat dau kho tc (ACI 209 Table)
+    # He so do am khong khi h (%): RH_test la phan so -> nhan 100
+    # He so the tich tren be mat V/S (mm)
+    # He so ti le cot lieu min psi (%): sandrate la phan so -> nhan 100
+    # He so ham luong chat ket dinh c (kg/m3)
+    # Khong co do sut va ham luong khi -> he so = 1.0 (giả định)
+    eps_shu = 780.0 * gamma_sh          # don vi ×10^-6
+# He so hinh dang k_s (B3 Eq. 1.12 = B4): 1 tam vo han, 2 tru vo han,
+# 3 lang tru vuong vo han, 4 cau, 5 lap phuong — khop ma hoa cot Shape_factor.
+    """B3 (Bažant-Baweja, SI) co ngot KHO (×10^-6); Type I, bao duong am."""
+    fc = float(row["fc28"])              # MPa (cuong do trung binh)
+    eps_sinf = 0.019 * w ** 2.1 * fc ** (-0.28) + 270.0   # ×10^-6, alpha1=alpha2=1
+    h = float(row["RH_test"])                              # phan so, <=0.98 trong du lieu
+# B4 (RILEM TC-242-MDC 2015), xi mang loai R; k_tau_a = k_eps_a = 1.0
+    """B4: tra ve (kho, tu sinh) ×10^-6, do tu thoi diem t0."""
+    def e_rel(t: float) -> float:                          # E(t)/E28, B4 dung 6/7
+    # --- tu sinh (tinh theo tuoi tuyet doi t, tru phan da xay ra truoc t0) ---
+    """B4 co ngot TONG = kho + tu sinh."""
+    """B4 CHI phan kho — phan tu sinh ngoai suy rat manh khi w/c << 0.38."""
+    """fib MC2010 co ngot TONG = co ban + kho (×10^-6), do tu thoi diem ts=t0."""
+    # co ban (tu sinh), Eq. 5.1-78..79 — do tu ts nen tru beta_bs(ts)
+        beta_rh = -0.25                                    # truong no
+    "B4 (chi kho)": b4_drying_shrinkage,
+    """R2/RMSE/MAE don gian (khac regression_metrics cua common_tabular.py:
+    khong co NRMSE_IQR_pct vi day khong phai pipeline ML co train/val/test)."""
+# PHAN 3/3 - CHAY THAT: TINH CONG THUC + CHAM DIEM + IN KET QUA
+    print("[Cong thuc kinh nghiem] BUOC 1/2: Chuan bi du lieu (loc + feature engineering)")
+    y = df["y_shrinkage_total_mm_per_m"].to_numpy(float)
+    print(f"Da chuan bi xong du lieu: {data_outputs['point']} ({len(df)} diem)")
+    print("[Cong thuc kinh nghiem] BUOC 2/2: Tinh 5 cong thuc + cham diem R2/RMSE/MAE")
+    print(f"Tap con seq (cung diem GRU/LSTM/TCN cham OOF): {int(mask.sum())}/{len(df)} diem")
+        k = float(np.dot(y, pred) / np.dot(pred, pred)) if np.dot(pred, pred) > 0 else 1.0
+            {"Model": f"{name} (chuan)", **metrics(y, pred), "scale": 1.0},
+            {"Model": f"{name} (hieu chinh)", **metrics(y, k * pred), "scale": k},
+            {"Model": f"{name} (chuan, tap con seq)", **metrics(y_s, pred_s), "scale": 1.0},
+            {"Model": f"{name} (hieu chinh, tap con seq)", **metrics(y_s, k_s * pred_s), "scale": k_s},
+    print("\n=== Cong thuc kinh nghiem tren toan bo du lieu (so sanh voi OOF DL) ===")
+    print(f"\nDa ghi: {out_dir}")
+    print("\nDa chay xong toan bo pipeline cho cong thuc kinh nghiem.")

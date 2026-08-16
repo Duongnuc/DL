@@ -1,0 +1,229 @@
+"""Merged file - 08_lstm.py
+original: buoc_08_lstm.py, plus the shared pipeline common_sequence_group.py,
+  2. Define the model architecture + Optuna hyperparameter search space - from buoc_08_lstm.py.
+written to the hidden _cache/lstm/ directory so downstream summary files (12, 13) can
+Run: python 08_lstm.py
+            y_transformed = log(1 + clip(y, 0))
+        y = np.log1p(np.clip(y_raw, 0.0, None)) if use_log1p else y_raw
+        sequences_y.append(y)
+    for i, (x, y) in enumerate(zip(xs, ys)):
+        batch_y[i, :length] = y
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+# PART 3/4 - MODEL ARCHITECTURE + SEARCH SPACE (merged from buoc_08_lstm.py)
+Step 08 - LSTM (Long Short-Term Memory) model for predicting shrinkage time series.
+WHAT IS LSTM?
+LSTM (short for Long Short-Term Memory) is
+a recurrent neural network (RNN) architecture proposed by Hochreiter & Schmidhuber
+in 1997. It is the classic and most popular RNN architecture, specifically designed
+to address the "long-term memory loss" (vanishing gradient) problem that traditional
+RNNs suffer from when processing long sequences.
+Core idea: LSTM has its own dedicated "highway" called the cell state, allowing
+important information to "flow" throughout the sequence without decaying. Three special
+gates control adding, removing, or reading information from this cell state.
+DETAILED ARCHITECTURE - THREE GATES AND THE CELL STATE
+At each time step t, LSTM receives:
+  - x_t      : the feature vector at time t
+  - h_{t-1}  : the hidden state from the previous step
+  - C_{t-1}  : the cell state from the previous step
+And computes through 3 gates + 1 cell state:
+1) FORGET GATE - denoted f_t:
+   Formula: f_t = sigmoid(W_f * [h_{t-1}, x_t] + b_f)
+   - Decides "what percentage" of the information in the old cell state will be ERASED.
+   - Sigmoid gives a value from 0 to 1:
+     * f_t near 0: ERASES almost all old information -> "forgets" the past
+     * f_t near 1: KEEPS almost all old information -> "remembers" the past
+   - Shrinkage example: if the environmental conditions change suddenly (switching from
+     drying to water immersion), the forget gate can "erase" old information that is no longer
+     relevant.
+2) INPUT GATE - denoted i_t:
+   Formula: i_t = sigmoid(W_i * [h_{t-1}, x_t] + b_i)
+   Candidate:  C_tilde = tanh(W_C * [h_{t-1}, x_t] + b_C)
+   - The input gate has 2 parts:
+     a) i_t: decides "what percentage" of NEW information will be WRITTEN IN
+     b) C_tilde: a "candidate" vector containing potential new information (value from
+        -1 to 1 thanks to tanh)
+   - Combined: i_t * C_tilde = the portion of new information actually added
+   - Shrinkage example: when an important new measurement comes in (e.g. a sudden spike in shrinkage),
+     the input gate "opens" to record this information into long-term memory.
+3) CELL STATE UPDATE:
+   Formula: C_t = f_t * C_{t-1} + i_t * C_tilde
+   - This is the MOST IMPORTANT step, combining "forgetting" and "remembering":
+     * f_t * C_{t-1}: the portion of old information that is KEPT (after forget gate filtering)
+     * i_t * C_tilde: the portion of new information that is ADDED (after input gate filtering)
+   - The cell state acts like a "conveyor belt": information can
+     flow throughout the sequence almost unchanged if the forget gate = 1 and the
+     input gate = 0. This is exactly how LSTM solves the vanishing gradient problem!
+4) OUTPUT GATE - denoted o_t:
+   Formula: o_t = sigmoid(W_o * [h_{t-1}, x_t] + b_o)
+   - Decides "what percentage" of the information from the cell state will be OUTPUT
+     as the hidden state (to use for prediction and the next step).
+   - tanh(C_t) squashes the cell state into the range [-1, 1]
+   - o_t selects which part gets output
+   - Shrinkage example: the output gate decides which information in long-term memory
+     is useful for predicting shrinkage at the current time.
+WHY DOES LSTM HAVE A CELL STATE? - THE CORE DIFFERENCE FROM GRU
+The cell state is a SEPARATE "long-term memory", detached from the hidden state:
+  - Hidden state (h_t): "working memory" - contains information needed RIGHT NOW
+    to make a prediction and pass to the next step.
+  - Cell state (C_t): "long-term memory" - stores information that may be needed in the
+    FAR FUTURE. This information is protected by the gates, not continuously
+    transformed through matrix multiplications like the hidden state.
+Why is separation needed?
+  a) The hidden state is transformed heavily at each step (sigmoid, tanh) -> information
+     decays quickly. If only the hidden state were used (like GRU), it would be hard to remember information
+     from 100+ steps ago.
+  b) The cell state has an ADDITIVE mechanism: C_t = f * C_{t-1} + i * C_tilde
+     Addition lets the gradient flow backward easily (not multiplied repeatedly),
+     so information from very far back can still influence the present.
+  c) Three separate gates allow fine-grained control: what to forget, what to remember,
+     what to output - each has its own "controller".
+GRU merges the cell state and hidden state into ONE (only h_t), simpler but
+less flexible in managing long-term vs. short-term memory.
+DETAILED COMPARISON WITH GRU (Gated Recurrent Unit)
+  Number of gates:       3 (forget+input+output)      2 (reset+update)
+  Separate cell state:   YES (long-term memory)       NO (only a hidden state)
+  Number of parameters:  More (~33% more)              Fewer
+  Training speed:        Slower                        Faster
+  Memory (RAM):          More expensive                More economical
+  Short sequences (<100): Can be overly complex         Usually good enough
+  Long sequences (>500):  Usually better                May be worse
+  Memory control:        Finer-grained (3 separate gates) Simpler (2 gates)
+  Small data:            More prone to overfitting      Less overfitting
+  Research history:      Older, many variants           Newer, fewer variants
+When to choose LSTM instead of GRU?
+  - Long sequences where information from very far back needs to be remembered
+  - Data is large enough to avoid overfitting
+  - Fine-grained control between long-term and short-term memory is needed
+  - The pattern in the data is complex, with many layers of abstraction
+For shrinkage data, the BEST APPROACH is to run both GRU and LSTM then compare results,
+because there is no way to know in advance which model is better for a specific dataset.
+   - Uses the TPE (Tree-structured Parzen Estimator) algorithm - a form of
+     Bayesian optimization - to "guess" promising parameter regions based on
+     the results of previous trials
+   - Much more efficient than grid search (trying every combination) or
+     random search (trying randomly)
+   - Because sequences have different lengths (each GID has a different number of measurement days),
+     shorter sequences must be padded (with 0) to form a uniform batch
+   - The mask is a True/False tensor marking: True = a REAL data point,
+     False = a FAKE padding point
+   - The loss is computed only on REAL points: MSE = sum((y_pred - y_true)^2 * mask) / sum(mask)
+   - Without a mask: the model would learn to "predict 0" for padding, distorting the results
+   - The shrinkage value has a right-skewed distribution: many small values, few large values
+   - log1p(y) = log(1 + y): "compresses" the value range, making the distribution closer to normal
+   - DL models perform better when the target distribution is symmetric, near Gaussian
+   - When producing the final prediction: use expm1(y_hat) = exp(y_hat) - 1 to convert back
+ADVANTAGES OF LSTM
+  + Separate cell state -> remembers information very far back in long sequences
+  + Three independent gates -> fine-grained control over information flow
+  + Additive mechanism in the cell state -> good gradient flow, less vanishing
+  + Long-established architecture, well studied, many improved variants
+  + Usually superior for long sequences (>500 steps) or complex patterns
+DISADVANTAGES OF LSTM
+  - More parameters than GRU (~33%) -> slower to train and infer
+  - Uses more memory (RAM/VRAM) since it stores both the hidden state and the cell state
+  - More prone to overfitting than GRU when data is limited (due to more parameters)
+  - More complex to understand, debug, and tune
+  - For short sequences, the cell state advantage is unclear -> GRU may be good enough
+  - Sequential training -> cannot take advantage of parallelization
+    like a Transformer
+  Run standalone:  python buoc_08_lstm.py
+    Instead of letting the program crash with a hard-to-read traceback, we create a
+    clear message, with suggestions on how to fix it for the user.
+        str: Error message including the specific cause and a suggested fix.
+    """LSTM regression model using a sequence-to-sequence (seq2seq) architecture.
+    This class encapsulates the entire LSTM neural network architecture used to predict
+    the shrinkage value at EVERY time step in the sequence (not just the last step).
+    1. LSTM layer (nn.LSTM):
+       - At each step, applies 3 gates (forget + input + output) and updates the
+         cell state to manage long-term memory
+       - Can be stacked into multiple layers (num_layers > 1) to learn deeper representations
+       - When num_layers > 1: the lower layer's output is the upper layer's input, dropout is
+         applied BETWEEN layers (not applied at the last layer)
+       - Fully connected layer converting hidden state -> predicted
+         shrinkage value
+       - Mapping: hidden_dim dimensions -> 1 dimension (1 scalar value)
+       - Uses the SAME set of weights for every time step (weight sharing)
+    Structural comparison with GRU (buoc_07):
+       - GRU returns: (output, h_n) - only a hidden state
+       - LSTM returns: (output, (h_n, c_n)) - BOTH hidden state AND cell state
+       - However, the FC head part is identical: it only uses output (the hidden state at
+         each step) to predict, not directly using the cell state or h_n/c_n
+        - batch_size: number of sequences processed simultaneously. E.g. 16 sample groups (GID) at once
+        - seq_len:    sequence length (number of time steps), already padded to the same length.
+                      E.g. 50 measurement days, shorter sequences are padded with zeros
+        - input_dim:  number of features per step. E.g. [age, temperature, humidity, ...] = 8
+    Hidden state after LSTM:
+        - Contains the hidden state at EVERY time step (used for seq2seq prediction)
+        - The FINAL hidden state of each layer (not used in seq2seq)
+        - The FINAL cell state of each layer (not used in seq2seq)
+    input_dim  (int):   Number of input features per time step.
+    hidden_dim (int):   Size of the hidden state AND cell state (both the same
+                        size). A larger value -> a more powerful model but slower
+                        and more prone to overfitting. Commonly tried: 32, 48, 64.
+    num_layers (int):   Number of stacked LSTM layers. 1 layer is usually enough for
+                        simple problems; 2 layers help learn more abstract representations.
+    dropout    (float): Dropout rate (0.0 to 1.0) BETWEEN LSTM layers.
+                        Randomly "disables" neurons during training to fight overfitting.
+                        Only has an effect when num_layers > 1 (PyTorch does not apply
+                        dropout at the last layer).
+        # weights and supports .to(device), .parameters(), .state_dict(), etc.
+        # Main LSTM layer: processes the sequence over time steps.
+        # DIFFERENCE from GRU (buoc_07):
+        #   - LSTM maintains BOTH hidden state (h) AND cell state (c) at each step
+        #   - Has 3 gates instead of 2 -> about 33% more parameters
+        #   - With the same hidden_dim=64: GRU has ~3*64*64 = 12,288 gate parameters,
+        #     LSTM has ~4*64*64 = 16,384 gate parameters (4 matrices instead of 3)
+        #   hidden_size = hidden_dim : size of the hidden state AND cell state
+        #   num_layers  : number of stacked LSTM layers (stacked LSTM)
+        #   dropout     : dropout rate between layers (0 if only 1 layer)
+        #   batch_first = True : the input has shape (batch, seq, feat) instead of
+        #                 (seq, batch, feat). This is more intuitive.
+        # FC Head: a linear layer mapping the hidden state -> 1 predicted value.
+        # Exactly identical to GRU (buoc_07): the same Linear(hidden_dim, 1) structure
+        # since both GRU and LSTM output a hidden state of the same size.
+        DIFFERENCE from GRU:
+        - GRU: self.gru(x) returns (output, h_n)
+        - LSTM: self.lstm(x) returns (output, (h_n, c_n))
+          where c_n is the final cell state (long-term memory)
+        - However, we only use output (the hidden state at every step) so
+          the code looks nearly identical.
+        # Step 1: Pass the sequence through LSTM
+        # self.lstm(x) returns a tuple of 2 parts:
+        #   - hidden: (batch, seq_len, hidden_dim) - the hidden state AT EVERY step
+        #             This is the main output, containing information "filtered" from the cell state
+        #             via the output gate, ready for prediction.
+        #   - _     : tuple (h_n, c_n) - the final states:
+        #       h_n: (num_layers, batch, hidden_dim) - the final hidden state of each layer
+        #       c_n: (num_layers, batch, hidden_dim) - the final cell state of each layer
+        #     We don't need h_n and c_n because we use a seq2seq architecture (predicting at
+        #     every step, not just the last one).
+        #   The Linear layer applies y = W * h + b to each hidden vector at each
+        #   time step, using the SAME set of weights W and bias b.
+        # .squeeze(-1): removes the last dimension of size=1
+        #   Result: a 2D tensor, each element is 1 predicted shrinkage value.
+    """Builds an LSTM model from the hyperparameters suggested by Optuna.
+    Every time Optuna tries a new parameter set, this function creates the corresponding
+    LSTM model to train and evaluate.
+        nn.Module: An LSTMRegressor instance ready for training.
+        num_layers=int(params["num_layers"]),    # Number of LSTM layers (1 or 2)
+    Optuna calls this function every trial (attempt) to get a new parameter set.
+    Each parameter is chosen from a reasonable value range, and Optuna gradually focuses
+    on the region that gives the best results (Bayesian optimization with TPE).
+    NOTE: This search space is IDENTICAL to GRU (buoc_07). This is INTENTIONAL:
+    - Same search space -> a fair comparison between the 2 architectures
+    - Differences in the results reflect ARCHITECTURAL differences, not
+      hyperparameter differences
+        Size of the hidden state AND cell state (both the same size in LSTM).
+        Chosen from 3 fixed values. 32 = light, 64 = powerful.
+        Note: with the same hidden_dim, LSTM has more parameters than GRU (~33%) because it has
+        1 extra gate (3 gates vs 2 gates) and a cell state.
+        Number of stacked LSTM layers. 1 layer is already powerful enough for many problems.
+        2 layers allow learning more abstract representations but risk overfitting.
+        Dropout rate between layers. Especially important for LSTM since LSTM
+        has more parameters than GRU -> needs stronger regularization to avoid overfitting.
+        Learning rate - learning speed. Log scale because the optimal value is usually distributed
+        logarithmically. This is the parameter with the MOST INFLUENCE on the result.
+        Weight decay - L2 penalty coefficient. Prevents weights from growing too large, improving
+        generalization ability.
+               to intelligently choose parameter values.

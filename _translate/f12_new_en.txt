@@ -1,0 +1,66 @@
+"""Merged file - 12_summary_comparison.py
+This file MERGES (without omission) content from 3 original files in the research
+pipeline: buoc_12_kfold_driver.py (the comparison-table section - NOT the k-fold
+run section, since each model already runs its own k-fold in its own file 01-10),
+buoc_22_conformal.py (conformal prediction intervals from out-of-fold residuals), and
+buoc_25_bootstrap_ci.py (bootstrap CI clustered by GID + significant pairwise
+Unlike files 01-11 (which prepare their own data + train their own models), this file ONLY
+READS BACK results already saved in the hidden _cache/<model>/kfold/ directory of files
+01-10 (and _cache/empirical/ of file 11) - it does NOT retrain anything. Therefore
+FILES 01-11 MUST BE RUN FIRST (at least a few files, to have comparison data), then
+only then run this file.
+  1. Assemble the Group K-Fold comparison table for all models (mean R2/RMSE/MAE
+     +/- standard deviation across 5 folds), cross-checked against the empirical formulas.
+  2. Compute conformal prediction intervals (split-conformal, leave-fold-out) for each
+     model with at least 2 folds - answering the question "how large can the error be".
+  3. Bootstrap 2000 times clustered by GID to get 95% confidence intervals for R2/RMSE, and
+     pairwise comparisons between models to see whether the difference is
+     statistically significant.
+Intermediate CSV results are written to _cache/tong_hop/ (00_kfold_comparison.csv,
+Run: python 12_summary_comparison.py
+# Subdirectories (inside _cache/) contain kfold_aggregate.csv + oof_predictions.csv
+# for each model, written by files 01-10 once group k-fold has finished running.
+# Model pairs for statistical comparison (same as buoc_25), keeping only pairs with scientific significance
+CONFORMAL_ALPHAS = [0.10, 0.05]     # 90% and 95%
+CONFORMAL_EPS = 10.0                # minimum y_hat threshold for the normalized variant
+# PART 1: Assemble the k-fold comparison table for all models (same as buoc_12, but ONLY
+# READS BACK existing results, does not rerun) + cross-checks against the empirical formulas
+# (buoc_20/file 11, the calibrated variant on the seq subset, for a fair comparison).
+        print(f"[note] no k-fold results yet for: {', '.join(missing)} "
+              "(please run the corresponding file first, e.g. python 07_gru.py)")
+    print("=== Group K-Fold comparison table (read back from _cache/, not rerun) ===")
+        print("No model has k-fold results in _cache/ yet.")
+        emp_best = emp[emp["Model"].str.contains(r"calibrated, seq subset", regex=True)]
+        print("\n=== Cross-check against empirical formulas (calibrated, seq_ok=1 subset) ===")
+        print("\n[note] no empirical-formula results yet (please run 11_empirical_formula.py first)")
+    print(f"\nComparison table: {out_dir / '00_kfold_comparison.csv'}")
+# PART 2: Conformal prediction intervals (same as buoc_22) - only applies to models
+# with OOF predictions by fold (needs >=2 folds to calibrate leave-fold-out).
+    """Finite-sample-corrected quantile: ceil((n+1)(1-alpha))/n, method='higher'."""
+    y, yh, fold = oof["y_true"].to_numpy(), oof["y_pred"].to_numpy(), oof["Fold"].to_numpy()
+    abs_res = np.abs(y - yh)
+            lo = np.full(len(y), np.nan)
+            hi = np.full(len(y), np.nan)
+            lo = np.maximum(lo, 0.0)   # shrinkage cannot be negative
+            covered = (y >= lo) & (y <= hi)
+                "N": int(len(y)),
+            print(f"[skipped] {name}: only has {oof['Fold'].nunique()} fold "
+                  "(needs >=2 to calibrate leave-fold-out)")
+        print("No model has enough data yet to compute conformal intervals (needs oof_predictions.csv with >=2 folds).")
+    print("=== Conformal intervals from out-of-fold residuals (leave-fold-out, group-honest) ===")
+            print(f"\n--- nominal coverage level {1-alpha:.0%}, method {method} ---")
+    print(f"\nConformal results saved at: {out_dir}")
+# PART 3: Bootstrap CI clustered by GID + pairwise comparison (same as buoc_25) - only
+# applies to models that already have oof_predictions.csv (GID, y_true, y_pred).
+    """Read OOF and aggregate into sufficient statistics by GID."""
+    """stats: (G,5) columns [n, sy, sy2, sse, sae]; idx: (B,G) GID indices for resampling."""
+        print("No model has oof_predictions.csv to bootstrap yet.")
+    print(f"=== 95% CI by model (GID-clustered bootstrap, B={BOOT_B}) ===")
+            print(f"[skipped pair] {a} vs {b}: missing OOF data")
+        print("\n=== Pairwise comparison (R2 difference, same bootstrap sample, common GID set) ===")
+    print(f"\nBootstrap results saved at: {out_dir}")
+# ACTUAL RUN: assemble comparison table + conformal + bootstrap CI
+    print("[Summary comparison] PART 1/3: Group K-Fold comparison table")
+    print("[Summary comparison] PART 2/3: Conformal prediction intervals")
+    print("[Summary comparison] PART 3/3: Bootstrap CI + pairwise comparison")
+    print("\nFinished running the entire summary-comparison pipeline.")

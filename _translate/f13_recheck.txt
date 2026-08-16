@@ -1,0 +1,41 @@
+    te = regression_metrics(y_test_raw, pred_test_raw)
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+            y_transformed = log(1 + clip(y, 0))
+        y = np.log1p(np.clip(y_raw, 0.0, None)) if use_log1p else y_raw
+        sequences_y.append(y)
+    for i, (x, y) in enumerate(zip(xs, ys)):
+        batch_y[i, :length] = y
+    ───────────────────────────────────────
+      │
+      ↓                                                      │
+    ╔══════════════════════════════════════╗                  │
+    ╚══════════════════════════════════════╝
+      ↓
+    ─────────────────
+    ────────────────────────────────────────
+    [Input Block] FC(in_dim→d) → BN → ReLU → Dropout
+    [ResBlock_1] 2×FC + skip connection (d→d)
+    [ResBlock_2] 2×FC + skip connection (d→d)
+    [ResBlock_N] 2×FC + skip connection (d→d)
+    ca, cb = X_base[:, idx_a], X_base[:, idx_b]
+    ga = np.linspace(np.percentile(ca, lo_pct), np.percentile(ca, hi_pct), grid_n)
+    for i, va in enumerate(ga):
+            Xt[:, idx_a] = va
+        x, y = pdp_1d(model, X_base, fi, scaler, n_numeric, log_cap)
+        ax.plot(x, y, color="#c0504d", lw=2.4)
+        ax.fill_between(x, y, y.min(), color="#c0504d", alpha=0.12)
+        ax.set_title(f"{label_of(feature_names[ia])}\n× {label_of(feature_names[ib])}",
+            va = float(loss_fn(model(Xva), yva).item())
+        sched.step(va)
+        hist_va.append(va)
+        if va < best_val:
+            best_val, best_epoch = va, ep + 1
+        va = float(mean_squared_error(va_t, va_p))
+            best_val, best_epoch = va, ep
+        ax.plot(ep, r["va"], color="#c0504d", lw=2.2, label="Validation MSE (log-space)")
+    tr, va, best = train_tabular_history(m, tab["Xtr"], tab["ytr"], tab["Xva"], tab["yva"],
+    print(f"  ResMLP   : best_epoch={best} train_end={tr[-1]:.4f} val_end={va[-1]:.4f} val_min={min(va):.4f}")
+                    "tr": tr, "va": va, "best": best})
+    print(f"  ANNBasic : best_epoch={best} train_end={tr[-1]:.4f} val_end={va[-1]:.4f} val_min={min(va):.4f}")
+    tr, va, best = train_sequence_history(m, seq["train_loader"], seq["val_loader"],
+    print(f"  LSTM     : best_epoch={best} train_end={tr[-1]:.4f} val_end={va[-1]:.4f} val_min={min(va):.4f}")

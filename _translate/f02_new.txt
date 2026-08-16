@@ -1,0 +1,200 @@
+"""File gop - 02_mlp_tapered.py
+goc: buoc_03_mlp_tapered.py, cong voi pipeline dung chung common_tabular.py,
+  2. Dinh nghia kien truc mo hinh + khong gian sieu tham so Optuna - tu buoc_03_mlp_tapered.py.
+duoc ghi vao thu muc an _cache/mlp_tapered/ de cac file tong hop phia sau (12, 13) co the
+Chay: python 02_mlp_tapered.py
+    te = regression_metrics(y_test_raw, pred_test_raw)
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+    print(f"TOM TAT GROUP K-FOLD - {model_name}")
+            print("Chi tiet tung fold:")
+    print("Cac file output chinh:")
+    stats_text = f"So diem: {m['N']}\nR2: {m['R2']:.2f}\nNRMSE: {m['NRMSE_IQR_pct']:.2f}%"
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+    axes[0].set_title("Lich su toi uu Optuna (thap hon = tot hon)")
+# PHAN 3/4 - KIEN TRUC MO HINH + SEARCH SPACE (gop tu buoc_03_mlp_tapered.py)
+Mô hình MLP_Tapered -- Multi-Layer Perceptron với kiến trúc "phễu" (giảm dần số nút).
+Tên đầy đủ : MLP_Tapered (Multi-Layer Perceptron -- Tapered / Hình phễu)
+Tác giả     : Dùng trong pipeline benchmark so sánh các mô hình tabular.
+Mục đích    : Phân loại nhị phân (binary classification) trên dữ liệu dạng bảng.
+1. KIẾN TRÚC CHI TIẾT (Text Diagram)
+Giả sử in_dim=30 (30 đặc trưng đầu vào), h1=256, dropout=0.2:
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  Input (batch_size, 30)                                         │
+    │       │                                                         │
+    │       ▼                                                         │
+    │  ┌─────────────┐                                                │
+    │  │ Linear(30→256) │  ← Tầng 1: Mở rộng không gian đặc trưng    │
+    │  │ BatchNorm(256) │  ← Chuẩn hoá để gradient không bùng nổ     │
+    │  │ ReLU()         │  ← Hàm kích hoạt phi tuyến                 │
+    │  │ Dropout(0.2)   │  ← Tắt ngẫu nhiên 20% nút để chống overfit│
+    │  └───────┬───────┘                                              │
+    │          ▼                                                      │
+    │  │ Linear(256→128)│  ← Tầng 2: Bắt đầu nén thông tin (h1/2)   │
+    │  │ BatchNorm(128) │  ← Chuẩn hoá tiếp để ổn định training      │
+    │  │ ReLU()         │  ← Kích hoạt phi tuyến                     │
+    │  │ Dropout(0.2)   │  ← Tiếp tục chống overfit                  │
+    │  │ Linear(128→64) │  ← Tầng 3: Nén tiếp (h1/4), KHÔNG có BN   │
+    │  │ Dropout(0.2)   │  ← Chống overfit                           │
+    │  │ Linear(64→1)   │  ← Tầng output: 1 nút cho bài toán nhị phân│
+    │  Output (batch_size, 1) -- logit, chưa qua sigmoid             │
+    └──────────────────────────────────────────────────────────────────┘
+    Tổng quan luồng dữ liệu:
+        30 → 256 → 128 → 64 → 1
+        (rộng)  (nén dần)  (ra 1 giá trị)
+2. SO SÁNH VỚI ANNBasic (buoc_02)
+    ┌────────────────┬──────────────────────┬───────────────────────────┐
+    │ Tiêu chí       │ ANNBasic             │ MLP_Tapered               │
+    ├────────────────┼──────────────────────┼───────────────────────────┤
+    │ Số nút mỗi tầng│ Bằng nhau (h, h, h) │ Giảm dần (h, h/2, h/4)   │
+    │ BatchNorm      │ Không có             │ Có ở 2 tầng đầu          │
+    │ Tầng đầu       │ Nhỏ (~64-128)       │ Rộng hơn (~64-512)       │
+    │ Ý tưởng        │ Đơn giản, đều        │ Phễu: bắt rộng, nén dần │
+    │ Chống overfit   │ Chỉ Dropout          │ Dropout + BatchNorm      │
+    │ Số tham số      │ Nhiều (tầng đều)    │ Ít hơn (tầng sau nhỏ)   │
+    └────────────────┴──────────────────────┴───────────────────────────┘
+    Tại sao kiến trúc phễu tốt hơn kiến trúc đều?
+    - Tầng đầu rộng giúp mạng "nhìn" được nhiều tổ hợp đặc trưng khác nhau.
+    - Tầng sau hẹp dần buộc mạng phải "chọn lọc" thông tin quan trọng nhất,
+      tương tự cách bộ não con người xử lý: thu thập rồi tổng hợp.
+    - BatchNorm giúp giá trị trung gian không quá lớn/nhỏ, nhờ đó gradient
+      truyền ngược (backpropagation) ổn định hơn, training nhanh hội tụ hơn.
+3. CÁCH TỐI ƯU (Hyperparameter Tuning)
+    - Dùng Optuna (thư viện tối ưu Bayesian) để tự động tìm:
+        + h1 (taper_h1): số nút tầng đầu tiên (64-512)
+        + dropout: tỷ lệ tắt nút (0.05-0.35)
+        + lr (learning rate): tốc độ học (2e-4 đến 3e-3)
+        + wd (weight decay): hệ số phạt trọng số (1e-6 đến 5e-4)
+    - Tầng h2, h3 được tính tự động từ h1 (h1/2, h1/4), nên chỉ cần
+      tune 1 tham số h1 thay vì tune riêng 3 tầng -> giảm search space.
+4. ƯU ĐIỂM
+    + Ít tham số hơn mạng đều nhờ tầng sau nhỏ dần -> huấn luyện nhanh hơn.
+    + BatchNorm giúp training ổn định, ít nhạy cảm với learning rate.
+    + Kiến trúc phễu phù hợp trực giác: trích xuất rồi nén thông tin.
+    + Chỉ cần tune 1 tham số h1, h2 và h3 tự suy ra -> search space nhỏ.
+5. NHƯỢC ĐIỂM
+    - BatchNorm hoạt động khác ở train vs eval mode, cần chú ý khi deploy.
+    - Nếu h1 quá lớn, tầng đầu có thể overfit trước khi tầng sau kịp nén.
+    - Kiến trúc cứng (chia 2 mỗi tầng), không linh hoạt bằng tune riêng.
+    - Với dữ liệu rất nhỏ, BatchNorm có thể gây nhiễu (batch nhỏ -> thống kê
+      trung bình/phương sai không chính xác).
+Chạy độc lập:  python buoc_03_mlp_tapered.py
+# Kiến trúc mạng -- Định nghĩa cấu trúc các tầng (layer) của mô hình
+    """MLP kiến trúc phễu: số nút giảm dần qua mỗi tầng ẩn (h1 -> h1/2 -> h1/4 -> 1).
+    Ý tưởng cốt lõi:
+        Tầng đầu rộng để "quét" nhiều tổ hợp đặc trưng đầu vào, sau đó các tầng
+        tiếp theo hẹp dần để buộc mạng phải "chắt lọc" những thông tin quan trọng
+        nhất, cuối cùng nén về 1 con số (xác suất thuộc lớp dương).
+        x : Tensor có shape (batch_size, in_dim)
+            Mỗi hàng là 1 mẫu dữ liệu, mỗi cột là 1 đặc trưng (feature).
+            Ví dụ: với bộ dữ liệu Breast Cancer thì in_dim=30 (30 đặc trưng
+            như bán kính trung bình, chu vi, diện tích, v.v.).
+        Tensor có shape (batch_size, 1)
+            Giá trị logit (chưa qua sigmoid). Hàm loss BCEWithLogitsLoss sẽ
+            tự áp dụng sigmoid bên trong, nên ta KHÔNG cần gọi sigmoid ở đây.
+            Lý do: kết hợp sigmoid + BCE trong 1 hàm giúp tính toán ổn định
+            hơn về mặt số học (numerical stability).
+    Tham số khởi tạo (Parameters):
+            Số đặc trưng (feature) đầu vào. Phải khớp với số cột của dữ liệu
+            sau khi đã tiền xử lý (loại bỏ cột target, mã hoá categorical, v.v.).
+            Số nút (neuron) ở tầng ẩn thứ nhất -- tầng rộng nhất.
+            Tầng h2 và h3 được tính tự động: h2 = h1 // 2, h3 = h2 // 2.
+            Ví dụ: h1=256 -> h2=128 -> h3=64.
+            Giá trị h1 lớn giúp mạng biểu diễn phong phú hơn nhưng tốn bộ nhớ
+            và dễ overfit hơn; giá trị nhỏ thì ngược lại.
+        dropout : float (0.0 đến 1.0)
+            Tỷ lệ nút bị tắt ngẫu nhiên trong mỗi lần forward pass khi training.
+            Ví dụ: dropout=0.2 nghĩa là 20% nút bị tắt -> mạng không thể
+            "ỷ lại" vào một vài nút cụ thể -> buộc phải học đặc trưng tổng quát
+            hơn -> giảm overfit. Khi eval/predict, dropout tự động tắt.
+    Forward pass (luồng dữ liệu đi qua mạng):
+        1. Tầng 1: Linear(in_dim -> h1) -> BatchNorm -> ReLU -> Dropout
+           Mở rộng không gian, chuẩn hoá, kích hoạt phi tuyến, chống overfit.
+        2. Tầng 2: Linear(h1 -> h2) -> BatchNorm -> ReLU -> Dropout
+           Bắt đầu nén, vẫn chuẩn hoá vì gradient ở tầng giữa dễ mất ổn định.
+        3. Tầng 3: Linear(h2 -> h3) -> ReLU -> Dropout
+           Nén tiếp. KHÔNG có BatchNorm vì tầng này đã nhỏ, BN thêm vào có thể
+           gây nhiễu (batch statistics ít chính xác khi chiều nhỏ).
+        4. Tầng output: Linear(h3 -> 1)
+           Ra 1 giá trị logit. Không có activation vì loss function tự xử lý.
+        # --- Tính số nút tầng 2 và tầng 3 bằng cách chia đôi ---
+        # Dùng phép chia nguyên (//) để đảm bảo số nút là số nguyên.
+        # max(..., 8) và max(..., 4) đặt ngưỡng tối thiểu để tránh trường hợp
+        # h1 quá nhỏ (ví dụ h1=8) dẫn đến h2=4, h3=2 -- quá ít nút sẽ làm
+        # mạng mất khả năng biểu diễn (expressiveness), không học được gì.
+        h2 = max(h1 // 2, 8)   # Tầng 2: một nửa h1, tối thiểu 8 nút
+        h3 = max(h2 // 2, 4)   # Tầng 3: một nửa h2, tối thiểu 4 nút
+        # --- Xây dựng mạng bằng nn.Sequential ---
+        # nn.Sequential xếp các layer theo thứ tự; khi gọi forward, dữ liệu
+        # sẽ đi qua từng layer từ trên xuống dưới, không cần viết forward thủ công.
+            # === TẦNG ẨN 1 (rộng nhất -- "quét" đặc trưng) ===
+            nn.Linear(in_dim, h1),  # Phép biến đổi tuyến tính: y = Wx + b, W có shape (h1, in_dim)
+            nn.BatchNorm1d(h1),     # Chuẩn hoá output theo batch: (x - mean) / std, rồi scale + shift.
+                                    # Tại sao cần? Vì nếu output của Linear có giá trị rất lớn/nhỏ,
+                                    # gradient sẽ bùng nổ hoặc biến mất -> training chậm hoặc không hội tụ.
+            nn.ReLU(),              # ReLU(x) = max(0, x). Tại sao dùng ReLU?
+                                    # (1) Tính toán nhanh, (2) gradient = 0 hoặc 1 nên ít bị vanishing,
+                                    # (3) tạo tính phi tuyến giúp mạng học được quan hệ phức tạp.
+            nn.Dropout(dropout),    # Tắt ngẫu nhiên một tỷ lệ nút. Tại sao đặt SAU activation?
+                                    # Vì ta muốn tắt các nút đã được kích hoạt, không phải tắt trước
+                                    # khi biết nút nào "sáng" (có giá trị > 0 sau ReLU).
+            # === TẦNG ẨN 2 (nén xuống h1/2) ===
+            nn.Linear(h1, h2),      # Giảm chiều từ h1 xuống h2 -- buộc mạng chọn lọc thông tin
+            nn.BatchNorm1d(h2),     # Vẫn cần chuẩn hoá vì tầng giữa dễ bị gradient không ổn định
+            nn.ReLU(),              # Kích hoạt phi tuyến -- giống tầng 1
+            nn.Dropout(dropout),    # Chống overfit -- giống tầng 1
+            # === TẦNG ẨN 3 (nén tiếp xuống h1/4 -- KHÔNG có BatchNorm) ===
+            nn.Linear(h2, h3),      # Nén tiếp từ h2 xuống h3
+                                    # Tại sao KHÔNG có BatchNorm ở đây? Vì h3 thường nhỏ (16-64 nút),
+                                    # với chiều nhỏ, thống kê mean/var của batch không đại diện tốt,
+                                    # BatchNorm có thể gây nhiễu thay vì giúp ích.
+            nn.ReLU(),              # Kích hoạt phi tuyến
+            nn.Dropout(dropout),    # Chống overfit
+            # === TẦNG OUTPUT (1 nút cho bài toán nhị phân) ===
+            nn.Linear(h3, 1),       # Ra 1 giá trị logit. KHÔNG có activation function ở đây vì:
+                                    # (1) BCEWithLogitsLoss tự tích hợp sigmoid bên trong,
+                                    # (2) Tách sigmoid ra ngoài dễ gây lỗi numerical (log(sigmoid(x))
+                                    #     có thể = -inf khi x rất âm, nhưng BCEWithLogitsLoss
+                                    #     dùng công thức ổn định hơn để tránh vấn đề này).
+        """Truyền dữ liệu qua toàn bộ mạng và trả về logit.
+        Chỉ cần gọi self.net(x) vì nn.Sequential đã xử lý việc truyền
+        dữ liệu qua từng layer theo đúng thứ tự đã định nghĩa trong __init__.
+# Search space -- Không gian tìm kiếm siêu tham số (hyperparameter)
+    """Định nghĩa phạm vi tìm kiếm cho từng siêu tham số (hyperparameter).
+    Optuna sẽ gọi hàm này mỗi trial, mỗi lần chọn một bộ giá trị khác nhau
+    trong phạm vi đã định nghĩa, rồi huấn luyện mô hình với bộ giá trị đó
+    để xem kết quả tốt hay xấu, từ đó học cách chọn bộ tiếp theo thông minh hơn
+    (Bayesian optimization thay vì thử ngẫu nhiên).
+    Tham số được tune:
+        lr (learning rate - tốc độ học):
+            Phạm vi: 2e-4 đến 3e-3, phân bố logarithmic.
+            Tại sao log=True? Vì learning rate hoạt động theo bậc (1e-4 vs 1e-3
+            khác nhau gấp 10 lần), phân bố log giúp Optuna thử đều ở mỗi bậc
+            thay vì tập trung vào vùng lớn (nếu dùng uniform, hầu hết giá trị
+            sẽ rơi vào khoảng 1e-3 đến 3e-3, bỏ qua vùng nhỏ).
+        wd (weight decay - phạt trọng số):
+            Phạm vi: 1e-6 đến 5e-4, phân bố logarithmic.
+            Weight decay thêm một lượng nhỏ vào loss: loss += wd * sum(w^2).
+            Tác dụng: buộc trọng số không quá lớn -> mô hình đơn giản hơn -> giảm
+            overfit. Giá trị nhỏ (1e-6) gần như không phạt, giá trị lớn (5e-4)
+            phạt mạnh hơn. Cũng dùng log=True vì lý do tương tự lr.
+        dropout (tỷ lệ tắt nút):
+            Phạm vi: 0.05 đến 0.35, phân bố đều (uniform).
+            Tại sao không dùng log? Vì dropout hoạt động tuyến tính (0.1 và 0.2
+            khác nhau đúng 0.1, không phải gấp đôi về hiệu ứng).
+            0.05 = gần như không tắt -> dễ overfit nhưng học nhanh.
+            0.35 = tắt 35% nút -> chống overfit mạnh nhưng có thể underfit.
+        taper_h1 (số nút tầng ẩn đầu tiên):
+            Phạm vi: 64 đến 512 nút.
+            Đây là tham số QUAN TRỌNG NHẤT của kiến trúc phễu vì h2 và h3
+            được tính tự động từ h1 (h2 = h1/2, h3 = h1/4).
+            64 nút: mạng nhỏ, nhanh nhưng khả năng biểu diễn hạn chế.
+            512 nút: mạng lớn, mạnh nhưng chậm và dễ overfit với dữ liệu nhỏ.
+        "taper_h1": trial.suggest_int("taper_h1", 64, 512),  # Số nút tầng đầu, quyết định toàn bộ kiến trúc
+    """Khởi tạo mô hình MLP_Tapered từ bộ siêu tham số mà Optuna đã chọn.
+    Hàm này là "cầu nối" giữa Optuna và class MLP_Tapered: Optuna trả về dict
+    chứa các giá trị số, hàm này chuyển đổi sang đúng kiểu dữ liệu (int, float)
+    rồi truyền vào constructor của MLP_Tapered.
+    Tại sao cần int(params["taper_h1"])? Vì Optuna suggest_int có thể trả về
+    numpy.int64 trong một số trường hợp, ép về int thuần Python để tránh lỗi.
+# Main -- Điểm vào chương trình khi chạy file trực tiếp
+    print(f"\n[thoi gian chay] {(_t.time() - _t0) / 60.0:.2f} phut", flush=True)

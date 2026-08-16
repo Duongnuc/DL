@@ -1,0 +1,83 @@
+"""Merged file - 06_dcnv2.py
+original: buoc_09_dcnv2.py, buoc_19_dcnv2_kfold.py, plus the shared pipeline common_tabular.py,
+  2. Define the model architecture + Optuna hyperparameter search space - from buoc_09_dcnv2.py.
+written to the hidden _cache/dcnv2/ directory so downstream summary files (12, 13) can
+Run: python 06_dcnv2.py
+    te = regression_metrics(y_test_raw, pred_test_raw)
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+# PART 3/4 - MODEL ARCHITECTURE + SEARCH SPACE (merged from buoc_09_dcnv2.py)
+DCNv2 model -- Deep & Cross Network version 2 (Deep Network combined with Cross Network).
+The model consists of TWO parallel branches that run side by side then get concatenated:
+  a) CROSS NETWORK: creates "feature interactions" EXPLICITLY. This is the key
+     point that makes DCNv2 well suited to answering counter-argument #4 (about
+     interactions between variables such as w/cm, fly ash, and curing temperature):
+     the architecture learns the interaction order (cross-order) automatically instead of
+     relying only on post-hoc SHAP/PDP.
+  b) DEEP NETWORK: a regular MLP that learns higher-order non-linear
+     relationships that the cross branch doesn't fully capture.
+The two branches are combined in parallel (parallel structure) then passed through the output layer.
+2. CROSS BRANCH FORMULA (CrossLayerV2)
+Each cross layer computes:
+        x_{l+1} = x_0 (elementwise-mult) (W_l . x_l + b_l) + x_l
+where:
+  - x_0   : the ORIGINAL feature vector (initial input), kept unchanged across all layers.
+  - x_l   : the output of cross layer l.
+  - W_l   : a d x d weight MATRIX (this is what differs in "v2" compared to the original
+            DCN which uses a vector). The matrix gives much stronger interaction
+            representational power than a vector.
+  - elementwise-mult : element-wise multiplication.
+  - + x_l : skip connection -- helps stabilize training.
+Meaning: after l layers, the model can represent feature interactions up to order
+(l+1). For example 2 cross layers capture 3rd-order interactions between input variables.
+3. OVERALL ARCHITECTURE (parallel)
+   n_cross cross layers           deep_layers FC layers
+   (keeps size in_dim)     (FC -> BN -> ReLU -> Dropout)
+              Head: FC(-> 1)   = predicted value (regression)
+4. HYPERPARAMETERS (Optuna-optimized)
+  - n_cross (1-3)     : number of cross layers -> maximum feature interaction order.
+  - deep_h (64-256)   : number of units per layer of the deep branch.
+  - deep_layers (1-3) : number of layers of the deep branch.
+  - dropout (0.05-0.3): fights overfitting in the deep branch.
+  - lr, wd            : learning rate and weight decay for AdamW.
+  - Models feature interactions EXPLICITLY (interpretable, addresses counter-argument #4).
+  - The cross branch has few parameters and is stable; the deep branch adds higher-order non-linearity.
+  - Usually strong on tabular data with many interactions between variables.
+  - More components than a plain MLP -> more hyperparameters to tune.
+  - The d x d matrix in each cross layer is more expensive than a vector (DCN v1) when in_dim is large.
+Run standalone:  python buoc_09_dcnv2.py
+# Network architecture
+    """A cross layer (v2 version) using a d x d weight matrix.
+    Computes: x_{l+1} = x_0 (elementwise-mult) (W . x_l + b) + x_l
+      - x0: original input (kept unchanged across all layers), shape (batch, d).
+      - xl: output of the previous cross layer, shape (batch, d).
+      - W.xl + b: linear transform (nn.Linear) -> shape (batch, d).
+      - Element-wise multiply with x0 then add the skip connection xl.
+        # nn.Linear(d, d) is exactly W.x + b with W of size d x d.
+        # x0 (elementwise-mult) (W.xl + b) + xl
+    """Deep & Cross Network v2 -- parallel structure.
+        in_dim      (int):   Number of input features.
+        n_cross     (int):   Number of cross layers (max interaction order = n_cross + 1).
+        deep_h      (int):   Number of units per layer of the deep branch (deep network).
+        deep_layers (int):   Number of layers of the deep branch.
+        dropout     (float): Dropout rate in the deep branch.
+        # --- Cross branch: n_cross CrossLayerV2 layers (keeps size in_dim unchanged) ---
+        # LayerNorm caps the cross branch's output magnitude before concatenation. Needed because
+        # the x0 (elementwise-mult) (W.x_l) multiplication can amplify abnormally on out-of-distribution
+        # test data when split by GID group, causing exploding predictions.
+        # --- Deep branch: MLP [FC -> BN -> ReLU -> Dropout] x deep_layers ---
+        # --- Head: concatenate in parallel [cross (in_dim) | deep (deep_out_dim)] -> 1 ---
+        # Cross branch: loop through the layers, always keeping x0 = the original x
+        xl = self.cross_norm(xl)  # caps the cross branch's output magnitude (stable on OOD test data)
+        # Deep branch
+        # Concatenate in parallel then pass through the output layer
+    """Defines the hyperparameter search space for DCNv2."""
+        # learning rate (log scale) -- safe range for AdamW on tabular data
+        # weight decay (L2) -- STRONG regularization to keep the head weights small,
+        # preventing the cross branch from exploding when extrapolating on out-of-distribution test data.
+        # dropout in the deep branch (higher lower bound to fight OOD overfitting)
+        # number of cross layers: limited to 1-2 (interaction order 2-3) to limit amplification
+        # number of units per layer of the deep branch -- moderate capacity
+        # number of layers of the deep branch
+    """Factory: creates a DCNv2 instance from an Optuna-suggested parameter set."""
+    print(f"[{MODEL_NAME}] STEP 2/4: Holdout (train/val/test once, Optuna 8 trials)")

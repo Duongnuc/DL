@@ -1,0 +1,200 @@
+"""Merged file - 02_mlp_tapered.py
+original: buoc_03_mlp_tapered.py, plus the shared pipeline common_tabular.py,
+  2. Define the model architecture + Optuna hyperparameter search space - from buoc_03_mlp_tapered.py.
+written to the hidden _cache/mlp_tapered/ directory so downstream summary files (12, 13) can
+Run: python 02_mlp_tapered.py
+    te = regression_metrics(y_test_raw, pred_test_raw)
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+    print(f"GROUP K-FOLD SUMMARY - {model_name}")
+            print("Per-fold detail:")
+    print("Main output files:")
+    stats_text = f"N points: {m['N']}\nR2: {m['R2']:.2f}\nNRMSE: {m['NRMSE_IQR_pct']:.2f}%"
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+    axes[0].set_title("Optuna optimization history (lower = better)")
+# PART 3/4 - MODEL ARCHITECTURE + SEARCH SPACE (merged from buoc_03_mlp_tapered.py)
+MLP_Tapered model -- Multi-Layer Perceptron with a "funnel" architecture (decreasing node count).
+Full name : MLP_Tapered (Multi-Layer Perceptron -- Tapered / Funnel-shaped)
+Purpose    : Used in the benchmark pipeline comparing tabular models.
+Goal    : Binary classification on tabular data.
+1. DETAILED ARCHITECTURE (Text Diagram)
+Assume in_dim=30 (30 input features), h1=256, dropout=0.2:
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  Input (batch_size, 30)                                         │
+    │       │                                                         │
+    │       ▼                                                         │
+    │  ┌─────────────┐                                                │
+    │  │ Linear(30→256) │  ← Layer 1: expand the feature space          │
+    │  │ BatchNorm(256) │  ← Normalize so the gradient doesn't explode  │
+    │  │ ReLU()         │  ← Nonlinear activation function             │
+    │  │ Dropout(0.2)   │  ← Randomly disable 20% of nodes to reduce overfit│
+    │  └───────┬───────┘                                              │
+    │          ▼                                                      │
+    │  │ Linear(256→128)│  ← Layer 2: start compressing info (h1/2)   │
+    │  │ BatchNorm(128) │  ← Normalize again to stabilize training     │
+    │  │ ReLU()         │  ← Nonlinear activation                      │
+    │  │ Dropout(0.2)   │  ← Continue reducing overfit                  │
+    │  │ Linear(128→64) │  ← Layer 3: compress further (h1/4), NO BN   │
+    │  │ Dropout(0.2)   │  ← Reduce overfit                            │
+    │  │ Linear(64→1)   │  ← Output layer: 1 node for the binary task│
+    │  Output (batch_size, 1) -- logit, before sigmoid             │
+    └──────────────────────────────────────────────────────────────────┘
+    Overall data flow:
+        30 → 256 → 128 → 64 → 1
+        (wide)  (progressively compressed)  (1 output value)
+2. COMPARISON WITH ANNBasic (buoc_02)
+    ┌────────────────┬──────────────────────┬───────────────────────────┐
+    │ Criterion       │ ANNBasic             │ MLP_Tapered               │
+    ├────────────────┼──────────────────────┼───────────────────────────┤
+    │ Nodes per layer│ Equal (h, h, h)     │ Decreasing (h, h/2, h/4)   │
+    │ BatchNorm      │ None                 │ Present in first 2 layers │
+    │ First layer    │ Small (~64-128)     │ Wider (~64-512)            │
+    │ Idea           │ Simple, uniform      │ Funnel: wide capture, gradual compress │
+    │ Overfit control│ Dropout only         │ Dropout + BatchNorm       │
+    │ Param count    │ More (uniform layers)│ Fewer (later layers small)│
+    └────────────────┴──────────────────────┴───────────────────────────┘
+    Why is the funnel architecture better than a uniform one?
+    - A wide first layer lets the network "see" many different feature combinations.
+    - Progressively narrower later layers force the network to "select" the most important
+      information, similar to how the human brain processes: gather then synthesize.
+    - BatchNorm keeps intermediate values from being too large/small, so the gradient
+      propagated backward (backpropagation) is more stable and training converges faster.
+3. TUNING METHOD (Hyperparameter Tuning)
+    - Uses Optuna (a Bayesian optimization library) to automatically find:
+        + h1 (taper_h1): number of nodes in the first layer (64-512)
+        + dropout: node-disable rate (0.05-0.35)
+        + lr (learning rate): learning speed (2e-4 to 3e-3)
+        + wd (weight decay): weight penalty coefficient (1e-6 to 5e-4)
+    - Layers h2, h3 are computed automatically from h1 (h1/2, h1/4), so only
+      1 parameter h1 needs to be tuned instead of tuning 3 layers separately -> smaller search space.
+4. ADVANTAGES
+    + Fewer parameters than a uniform network thanks to progressively smaller layers -> faster training.
+    + BatchNorm makes training more stable, less sensitive to learning rate.
+    + The funnel architecture matches intuition: extract then compress information.
+    + Only need to tune 1 parameter h1, h2 and h3 are derived automatically -> smaller search space.
+5. DISADVANTAGES
+    - BatchNorm behaves differently in train vs eval mode, needs attention when deploying.
+    - If h1 is too large, the first layer may overfit before later layers can compress.
+    - Fixed architecture (halved each layer), less flexible than tuning each layer separately.
+    - With very small data, BatchNorm can introduce noise (small batch -> mean/variance
+      statistics are inaccurate).
+Run standalone:  python buoc_03_mlp_tapered.py
+# Network architecture -- Defines the layer structure of the model
+    """MLP funnel architecture: node count decreases through each hidden layer (h1 -> h1/2 -> h1/4 -> 1).
+    Core idea:
+        A wide first layer to "scan" many combinations of input features, then subsequent
+        layers narrow progressively to force the network to "distill" the most important
+        information, finally compressing down to 1 number (probability of the positive class).
+        x : Tensor with shape (batch_size, in_dim)
+            Each row is 1 data sample, each column is 1 feature.
+            Example: for the Breast Cancer dataset, in_dim=30 (30 features
+            such as mean radius, perimeter, area, etc.).
+        Tensor with shape (batch_size, 1)
+            Logit value (before sigmoid). The BCEWithLogitsLoss function will
+            apply sigmoid internally, so we do NOT need to call sigmoid here.
+            Reason: combining sigmoid + BCE into 1 function gives more numerically
+            stable computation.
+    Constructor parameters (Parameters):
+            Number of input features. Must match the number of columns in the data
+            after preprocessing (removing the target column, encoding categoricals, etc.).
+            Number of neurons in the first hidden layer -- the widest layer.
+            Layers h2 and h3 are computed automatically: h2 = h1 // 2, h3 = h2 // 2.
+            Example: h1=256 -> h2=128 -> h3=64.
+            A larger h1 gives the network richer representational power but costs more memory
+            and is more prone to overfitting; a smaller value is the opposite.
+        dropout : float (0.0 to 1.0)
+            Fraction of nodes randomly disabled on each forward pass during training.
+            Example: dropout=0.2 means 20% of nodes are disabled -> the network cannot
+            "rely" on a few specific nodes -> forced to learn more general features
+            -> reduces overfit. During eval/predict, dropout is automatically disabled.
+    Forward pass (data flow through the network):
+        1. Layer 1: Linear(in_dim -> h1) -> BatchNorm -> ReLU -> Dropout
+           Expand the space, normalize, nonlinear activation, reduce overfit.
+        2. Layer 2: Linear(h1 -> h2) -> BatchNorm -> ReLU -> Dropout
+           Start compressing, still normalize since gradients in middle layers are prone to instability.
+        3. Layer 3: Linear(h2 -> h3) -> ReLU -> Dropout
+           Compress further. NO BatchNorm since this layer is already small, adding BN could
+           introduce noise (batch statistics are less accurate at small dimensions).
+        4. Output layer: Linear(h3 -> 1)
+           Produces 1 logit value. No activation since the loss function handles it.
+        # --- Compute node counts for layers 2 and 3 by halving ---
+        # Use integer division (//) to ensure the node count is an integer.
+        # max(..., 8) and max(..., 4) set a minimum threshold to avoid cases where
+        # h1 is too small (e.g. h1=8), resulting in h2=4, h3=2 -- too few nodes would make
+        # the network lose representational capacity (expressiveness), unable to learn anything.
+        h2 = max(h1 // 2, 8)   # Layer 2: half of h1, minimum 8 nodes
+        h3 = max(h2 // 2, 4)   # Layer 3: half of h2, minimum 4 nodes
+        # --- Build the network using nn.Sequential ---
+        # nn.Sequential stacks layers in order; when calling forward, data
+        # passes through each layer top to bottom, no need to write forward manually.
+            # === HIDDEN LAYER 1 (widest -- "scans" features) ===
+            nn.Linear(in_dim, h1),  # Linear transform: y = Wx + b, W has shape (h1, in_dim)
+            nn.BatchNorm1d(h1),     # Normalize output per batch: (x - mean) / std, then scale + shift.
+                                    # Why needed? Because if Linear's output has very large/small values,
+                                    # the gradient will explode or vanish -> training is slow or doesn't converge.
+            nn.ReLU(),              # ReLU(x) = max(0, x). Why use ReLU?
+                                    # (1) Fast to compute, (2) gradient = 0 or 1 so less prone to vanishing,
+                                    # (3) introduces nonlinearity so the network can learn complex relationships.
+            nn.Dropout(dropout),    # Randomly disable a fraction of nodes. Why place it AFTER activation?
+                                    # Because we want to disable already-activated nodes, not disable before
+                                    # knowing which nodes are "lit" (value > 0 after ReLU).
+            # === HIDDEN LAYER 2 (compress down to h1/2) ===
+            nn.Linear(h1, h2),      # Reduce dimension from h1 to h2 -- forces the network to select info
+            nn.BatchNorm1d(h2),     # Still need normalization since middle layers are prone to unstable gradients
+            nn.ReLU(),              # Nonlinear activation -- same as layer 1
+            nn.Dropout(dropout),    # Reduce overfit -- same as layer 1
+            # === HIDDEN LAYER 3 (compress further to h1/4 -- NO BatchNorm) ===
+            nn.Linear(h2, h3),      # Compress further from h2 to h3
+                                    # Why NO BatchNorm here? Because h3 is usually small (16-64 nodes),
+                                    # at small dimensions, the batch's mean/var statistics aren't representative,
+                                    # BatchNorm could introduce noise rather than help.
+            nn.ReLU(),              # Nonlinear activation
+            nn.Dropout(dropout),    # Reduce overfit
+            # === OUTPUT LAYER (1 node for the binary task) ===
+            nn.Linear(h3, 1),       # Produces 1 logit value. NO activation function here because:
+                                    # (1) BCEWithLogitsLoss integrates sigmoid internally,
+                                    # (2) Separating out sigmoid can cause numerical issues (log(sigmoid(x))
+                                    #     can be -inf when x is very negative, but BCEWithLogitsLoss
+                                    #     uses a more stable formula to avoid this issue).
+        """Pass data through the entire network and return the logit.
+        Just need to call self.net(x) since nn.Sequential already handles passing
+        data through each layer in the order defined in __init__.
+# Search space -- Hyperparameter search space
+    """Define the search range for each hyperparameter.
+    Optuna calls this function each trial, each time choosing a different set of values
+    within the defined range, then trains the model with that set of values
+    to see if the result is good or bad, and learns to choose the next set more intelligently
+    (Bayesian optimization instead of random trial).
+    Tuned parameters:
+        lr (learning rate):
+            Range: 2e-4 to 3e-3, logarithmic distribution.
+            Why log=True? Because learning rate operates on an order-of-magnitude basis (1e-4 vs 1e-3
+            differ by a factor of 10), a log distribution lets Optuna sample evenly at each order of magnitude
+            instead of concentrating on the large region (with uniform, most values
+            would fall between 1e-3 and 3e-3, skipping the small region).
+        wd (weight decay):
+            Range: 1e-6 to 5e-4, logarithmic distribution.
+            Weight decay adds a small amount to the loss: loss += wd * sum(w^2).
+            Effect: forces weights to stay small -> simpler model -> reduces
+            overfit. A small value (1e-6) barely penalizes, a large value (5e-4)
+            penalizes more heavily. Also uses log=True for the same reason as lr.
+        dropout (node-disable rate):
+            Range: 0.05 to 0.35, uniform distribution.
+            Why not log? Because dropout operates linearly (0.1 and 0.2
+            differ by exactly 0.1, not by a doubling effect).
+            0.05 = almost nothing disabled -> prone to overfit but learns fast.
+            0.35 = 35% of nodes disabled -> strong overfit control but may underfit.
+        taper_h1 (number of nodes in the first hidden layer):
+            Range: 64 to 512 nodes.
+            This is the MOST IMPORTANT parameter of the funnel architecture since h2 and h3
+            are computed automatically from h1 (h2 = h1/2, h3 = h1/4).
+            64 nodes: small, fast network but limited representational power.
+            512 nodes: large, powerful network but slower and prone to overfitting on small data.
+        "taper_h1": trial.suggest_int("taper_h1", 64, 512),  # Number of nodes in the first layer, determines the whole architecture
+    """Initialize the MLP_Tapered model from the hyperparameter set chosen by Optuna.
+    This function is the "bridge" between Optuna and the MLP_Tapered class: Optuna returns a dict
+    containing numeric values, this function converts them to the correct data type (int, float)
+    then passes them into the MLP_Tapered constructor.
+    Why int(params["taper_h1"])? Because Optuna's suggest_int can return
+    numpy.int64 in some cases, cast to plain Python int to avoid errors.
+# Main -- entry point when running the file directly
+    print(f"\n[runtime] {(_t.time() - _t0) / 60.0:.2f} min", flush=True)

@@ -1,0 +1,753 @@
+"""14 - All figures/tables for the scientific paper: data description (Table 1,
+distribution histograms, correlation matrix) and the shrinkage development curve over
+time (measured vs LSTM-predicted on the holdout test set).
+This file MERGES TOGETHER (without omission) content from buoc_17_data_and_curves.py, plus
+the shared pipeline common_tabular.py, common_sequence_group.py and
+This file LIGHTLY RETRAINS 1 LSTM on a group-split holdout (seed 42), using the
+REPRESENTATIVE hyperparameters saved in _cache/lstm/kfold/best_params.json of file 08
+- if that file has not been run yet, use reasonable default parameters (will not crash).
+Figures are written to output_figures/, data tables are written to output_tables/ (both
+are VISIBLE directories, not hidden, since these are deliverables to submit for the paper/thesis).
+Run:  python 14_report_figures.py
+# PART 1 - SHARED PIPELINE FOR TABULAR MODELS (merged from common_tabular.py)
+# NOTE: must be placed before the data-preparation part because this block imports torch BEFORE
+# numpy/pandas/sklearn (required on Windows to avoid WinError 1114 when
+# loading torch's c10.dll if numpy/MKL was already loaded beforehand).
+# Disable Dynamo (PyTorch's JIT compiler) to avoid errors on some systems
+# Limit CPU thread count = 1 to ensure reproducible results (reproducibility)
+# IMPORTANT: torch must be imported BEFORE numpy/sklearn/optuna.
+# On Windows, if numpy/MKL is loaded first, loading torch's c10.dll
+# can fail with "[WinError 1114] DLL initialization routine failed".
+    # If PyTorch cannot be imported, create dummy (fallback) classes so the file still loads
+    # without a syntax error. A clear error will be raised at actual run time.
+# Limit PyTorch thread count = 1 to avoid resource contention and ensure reproducibility
+# The scientific stack is imported AFTER torch (see note above about WinError 1114).
+# Constants
+# Columns to exclude from the feature set: group column, target column, auxiliary columns
+# Categorical columns will be one-hot encoded for the DL model
+# Config & dataclass
+    """Config class holding all parameters to run a benchmark for a DL model.
+    Explanation of each parameter (for beginners):
+        data_path   : Path to the CSV file with input data (already preprocessed).
+        output_dir  : Directory to save results (summary CSV, best params, metadata).
+        split_mode  : How to split the data. "group" = split by GID group (recommended
+                      since it avoids data leakage between samples in the same group).
+                      "random" = split randomly by row.
+        seeds       : List of seed values. Each seed runs one full pipeline
+                      to evaluate stability.
+        n_trials    : Number of Optuna trials to find the best hyperparameters.
+                      More trials increase the chance of finding an optimal parameter set,
+                      but take more time.
+        max_epochs  : Maximum epochs when training each trial. If the model doesn't
+                      improve sooner, it stops early via early stopping.
+        patience    : Number of consecutive epochs where val loss doesn't decrease before
+                      stopping early. Helps avoid overtraining (overfitting).
+        dl_batch_size: Mini-batch size. Small batch -> more frequent updates
+                      but noisier. Large batch -> more stable but more memory.
+        device      : Compute device. "cpu" = use CPU, "cuda" = use GPU if available.
+    # Number of folds for group k-fold cross-validation (only used by run_tabular_kfold).
+    """Stores the indices of rows belonging to the train, val, test sets.
+    After splitting the data, we don't copy the data, we only store row indices.
+    To get the actual data, use df.iloc[train_idx] to access it.
+# Set seed (ensures reproducible results)
+    """Set the seed for all libraries so results can be reproduced.
+    Why do we need a seed?
+    - DL algorithms have many random steps: weight initialization,
+      batch shuffling, data splitting.
+    - Without a fixed seed, each run would give different results, making it
+      hard to compare models or debug.
+    - By setting the same seed, we ensure every random step happens identically,
+      making results fully reproducible.
+    Parameters:
+        seed: Integer used as the seed. 42 is commonly used by convention.
+# Utilities
+    """Convert an absolute path to a path relative to the package's root directory.
+    Helps metadata files have short, readable paths that are portable across machines.
+    """Build a detailed error message when PyTorch cannot be initialized.
+    Includes a suggested fix: create a separate environment for Python 3.11
+    with torch and spyder-kernels.
+    base = f"Could not initialize PyTorch for {model_name}."
+        " Tip: run the DL files in a separate Python 3.11 environment, "
+        "install torch and spyder-kernels, then point Spyder to that environment "
+        "instead of using spyder-runtime."
+# Evaluation metrics
+    """Compute evaluation metrics for the regression task.
+    Metrics computed:
+        N             : Number of samples.
+        R2            : Coefficient of determination (1.0 = perfect, 0.0 = as bad as predicting the mean).
+        RMSE          : Root mean squared error (same unit as target).
+        MAE           : Mean absolute error (less sensitive to outliers than RMSE).
+        NRMSE_IQR_pct : RMSE normalized by the interquartile range (IQR), expressed as a percentage.
+                        Helps compare error across datasets with different ranges.
+    # IQR = distance between the 75th and 25th percentile, used to normalize RMSE
+    """Aggregate results from multiple runs (multiple seeds) into a table of mean and standard deviation.
+    Group by (Split, Family, Model) then compute mean and std for each numeric metric.
+    Helps assess model stability across multiple runs.
+    # Filter out numeric columns (skip Seed, Split, Family, Model)
+    # Name columns like "RMSE_mean", "RMSE_std" for readability
+    # Add a column counting the number of runs per group
+# Data Splitting
+    """Bin a continuous value into groups (bins) by quantile for stratified splitting.
+    Stratified split ensures the target distribution is similar across train/val/test.
+    Returns None if there isn't enough data to split (e.g. too many duplicate values).
+    # Need at least 2 samples per bin for stratified train_test_split to work
+    """Randomly split data by row into train (70%), val (15%), test (15%).
+    This approach is simple but has a drawback: samples from the same GID group may end up
+    in both train and test, causing data leakage. Use group_stratified_split
+    instead when the data has group structure.
+    # Stratify by fc28 to distribute concrete strength evenly across the splits
+    # Split the remainder (30%) into val (15%) and test (15%)
+    """Split data by GID (Group ID) into train/val/test.
+    Why split by GID?
+    - Each GID represents a group of concrete samples from the same batch/conditions.
+    - If split randomly by row, samples from the same GID could end up in both train and test.
+      The model would "see" information from that group during training, leading to
+      falsely optimistic evaluation (data leakage).
+    - Splitting by GID ensures ALL samples in a group stay in the same split (train OR
+      val OR test), correctly reflecting the ability to generalize to unseen groups.
+    Procedure:
+        1. Compute the median fc28 for each GID to create a group-representative feature.
+        2. Split the GIDs into 70% train / 15% val / 15% test (stratified by fc28).
+        3. Assign all rows belonging to each GID to the corresponding split.
+    # Step 1: Compute median fc28 for each GID group
+    # Step 2: Split GIDs into train (70%) and the remainder (30%)
+    # Split the remainder into val and test (each ~15%)
+    # Step 3: Assign row indices based on the allocated GID groups
+    """Create folds for GROUP K-FOLD cross-validation (stratified by fc28).
+    Why do we need group k-fold?
+    - A single holdout split (70/15/15) only gives ONE test estimate -> prone to luck
+      depending on which group ends up in test. Reviewer comment (#2) requires cross-validation to
+      assess generalization ability more reliably.
+    - Group k-fold ensures EVERY GID group appears in the test set EXACTLY ONCE (across K
+      folds), and never appears in both train and test within the same fold ->
+      no data leakage between samples in the same group.
+        1. Each GID is represented by the group's median fc28; split into quantile bins to stratify.
+        2. StratifiedKFold over the list of GIDs -> assigns each GID to exactly 1 test fold.
+           (Falls back to plain KFold if stratification isn't possible.)
+        3. For each fold k: test = GIDs of fold k; the remainder is split into train/val
+           (val ~ val_fraction of the remainder, stratified by fc28 if possible).
+        n_splits     : number of folds K (e.g. 5).
+        seed         : random seed for splitting folds (reproducible).
+        val_fraction : fraction of groups taken out for validation FROM the remainder after
+                       removing test. Default 0.1765 ~ makes val approximately 15% of the total when K=5
+                       (0.1765 x 0.8 ~ 0.141).
+    Returns:
+        A list of [(SplitIndices, fold_id)] with fold_id running from 0..K-1.
+    # Step 2: assign each GID to a test fold
+        # Step 3: split train/val from the remainder (stratified by fc28 of the rest)
+    """Dispatcher function: chooses how to split the data based on split_mode.
+    Returns a tuple (SplitIndices, split_name) to record in the results.
+    """Compute diagnostic statistics about how the data was split.
+    Checks whether any GID group is duplicated across splits (should be 0).
+    If overlap > 0 it means there is data leakage, the split should be checked again.
+    # Count GID groups duplicated across splits (ideally = 0)
+# Data preprocessing
+    """Split the original DataFrame into 3 sub-DataFrames (train, val, test) based on the split indices.
+    reset_index(drop=True) so indices restart at 0, avoiding errors when accessed later.
+    """Fill missing values (NaN) in numeric columns with the MEDIAN computed ONLY on the train set.
+    Why put this step here (at experiment time) instead of at data-build time?
+    - If the median is computed on the ENTIRE dataset before splitting into train/test, information from
+      val/test (the median value) would "leak" into the train imputation ->
+      falsely optimistic evaluation. This is a form of preprocessing data leakage.
+    - Correct approach: fit the median ONLY on train, then apply (transform) it to train,
+      val and test alike. Exactly the same principle as StandardScaler.
+    This function modifies the 3 passed-in DataFrames in place.
+    If a column is entirely NaN on train (median = NaN), fill with 0.0 as a fallback.
+    # Fallback: any column whose median is still NaN (entirely NaN on train) -> fill with 0.0
+    """Standardize numeric features using StandardScaler.
+    StandardScaler transforms each feature to mean = 0 and standard deviation = 1.
+    This matters a lot for neural networks because:
+    - It puts features on the same scale, preventing large-magnitude features from dominating small ones.
+    - It helps the optimization process (gradient descent) converge faster.
+    IMPORTANT NOTE: fit_transform only on the train set, then transform on val/test.
+    Fitting on val/test as well would cause data leakage.
+    # Fit only on train to avoid leaking information from val/test
+    """One-hot encode categorical features for the DL model.
+    One-hot encoding turns each categorical value into a binary column (0 or 1).
+    Example: column "agg_type" with 3 values {1, 2, 3} becomes 3 columns: agg_type__1, agg_type__2, agg_type__3.
+    The list of categories is taken only from the train set to avoid data leakage.
+        A tuple of (train array, val array, test array, list of encoded column names).
+        # Convert to numeric and get the list of unique values from the train set
+        # Build encoded column names like "column_name__value"
+            """Build a one-hot array for one categorical column of a DataFrame."""
+    # Concatenate all one-hot blocks into a single array
+    """Full preprocessing pipeline: from the original DataFrame to NumPy arrays ready for DL.
+    Detailed procedure:
+        1. Remove non-feature columns (GID, target, auxiliary columns).
+        2. Split the DataFrame into train/val/test based on the split indices.
+        3. Classify columns into numeric and categorical.
+        4. Scale numeric features with StandardScaler (fit on train).
+        5. One-hot encode categorical features (categories from train).
+        6. Concatenate numeric and one-hot features into the final feature array.
+        7. Take the target as column "y_log1p" = log1p(y_shrinkage_total_mm_per_m).
+           log1p is used because:
+           - Shrinkage values are right-skewed.
+           - log1p makes the distribution closer to normal, easier for the model to learn.
+           - After prediction, use expm1 to convert back to the original value.
+    # Step 1: Determine feature columns (remove unused columns)
+    # Step 2: Split the DataFrame into 3 parts
+    # Step 3: Classify columns
+    # Step 3b: Fill missing values (NaN) using the median computed ONLY on train (avoids leakage).
+    # Imputation was moved from the data-build step to here to guarantee train-only.
+    # Step 4: Scale numeric features
+    # Step 5: One-hot encode categorical features
+    # Step 6: Concatenate numeric and one-hot features
+        """Concatenate feature arrays, skipping empty arrays."""
+    # Step 7: Take the log1p-transformed target
+    """Convert a NumPy array to a PyTorch tensor (float32) on the specified device (CPU or GPU)."""
+# Training the PyTorch model
+    """Train a PyTorch model with mini-batches, AdamW, ReduceLROnPlateau, and early stopping.
+    Detailed explanation for beginners:
+       - Instead of feeding the entire dataset into the model at once (memory-intensive),
+         we split the data into small batches (mini-batches) and update weights after each batch.
+       - Each epoch, the batch order is shuffled randomly so the model
+         doesn't learn the data order.
+       - The most popular optimization algorithm for DL today.
+       - Combines Adam (adaptive learning rate) with weight decay (penalizing large weights)
+         to avoid overfitting. Parameters: lr = learning rate, wd = weight decay.
+       - Automatically reduces the learning rate when val loss stops decreasing after some epochs.
+       - factor=0.5: halves the lr. patience=patience//3: waits a few epochs before reducing.
+       - min_lr=1e-5: never reduces below this threshold.
+       - Stops training early when val loss doesn't improve after 'patience' consecutive epochs.
+       - Saves the best model state (best_state) to restore after stopping.
+       - Helps avoid overfitting: the model learning train too well but performing poorly on val/test.
+       - Clips gradient magnitude to avoid "exploding gradients",
+         making training more stable.
+        model        : The PyTorch model (nn.Module) to train.
+        X_train      : Feature tensor for the training set.
+        y_train      : Target tensor for the training set.
+        X_val        : Feature tensor for the validation set.
+        y_val        : Target tensor for the validation set.
+        params       : Dict of hyperparameters (lr, wd, ...).
+        max_epochs   : Maximum number of epochs.
+        patience     : Number of epochs to wait before early stopping.
+        dl_batch_size: Mini-batch size.
+        (best_model, best_epoch, val_loss_history): the model with the best weights,
+        the epoch reached, and the val_loss of EACH epoch run (used to plot the learning curve later).
+    # Scheduler that reduces lr when val loss plateaus
+    loss_fn = nn.MSELoss()  # Loss function: Mean Squared Error
+    # Track the best state to restore on early stopping
+        model.train()  # Enable training mode (activates Dropout, BatchNorm train mode)
+        # Randomly shuffle sample order each epoch
+        # If the last batch has only 1 sample, merge it into the previous batch (BatchNorm needs at least 2 samples)
+            optimizer.zero_grad(set_to_none=True)  # Clear old gradients (saves memory)
+            loss = loss_fn(model(X_train[idx]), y_train[idx])  # Compute loss on the batch
+            loss.backward()  # Backpropagate to compute gradients
+            optimizer.step()  # Update weights
+        model.eval()  # Enable evaluation mode (disables Dropout, BatchNorm eval mode)
+        with torch.no_grad():  # No need to compute gradients during evaluation (saves memory)
+        scheduler.step(val_loss)  # Update the learning rate based on val loss
+        # Check whether val loss improved
+            # Save a copy of the best weights (cloned to CPU to save GPU memory)
+                break  # Early stop: val loss hasn't decreased after 'patience' epochs
+    # Restore the best weights
+    """Predict log1p(y) values from the trained model.
+    Returns a 1D NumPy array. The result is still on the log scale,
+    call np.expm1() to convert it back to the original value.
+    """Measure the importance of each feature via permutation importance.
+    Idea: shuffle the values of ONE feature column across rows,
+    breaking the relationship between that feature and the target, then measure how much
+    val MSE increases compared to the baseline. The more important the feature -> shuffling it
+    increases MSE the most. Reuses the ALREADY-TRAINED model of the current
+    fold (no retraining), only needs multiple forward-passes on val.
+# Result Summary
+    """Build a single summary result row for one run (one seed).
+    Compute metrics on all 3 sets (train, val, test) on the original scale (after expm1).
+    Also includes auxiliary info: number of features, number of epochs used, MSE on the log scale.
+    te = regression_metrics(y_test_raw, pred_test_raw)
+# Skip & Output Writers
+    """Write empty output files when the model is skipped (e.g. PyTorch import failed).
+    Still creates the full directory structure and metadata file so downstream steps don't fail.
+    The metadata file records the "skipped" status and the reason.
+    # Write an empty CSV file and an empty JSON file
+    """Write all results after the benchmark completes successfully.
+    Output files:
+        results_summary.csv   : Detailed results per seed (one row = one run).
+        results_aggregate.csv : Mean/std aggregated across seeds.
+        split_summary.csv     : Diagnostic statistics about how the data was split.
+        best_params.json      : Best hyperparameters found by Optuna for each seed.
+        run_metadata.json     : Info about the run (time, config, status).
+    # Use utf-8-sig for CSV so Excel opens Vietnamese text correctly
+# Evaluate a single split (shared between holdout and k-fold CV)
+    """Preprocessing + Optuna + training + evaluation for ONE split (train/val/test).
+    This is the core logic extracted for shared use by both:
+      - run_tabular_benchmark (70/15/15 holdout split per seed), and
+      - run_tabular_kfold (group k-fold cross-validation, called once per fold).
+    Returns a dict with:
+        row        : one result row (train/val/test metrics on the original scale).
+        params     : best hyperparameters found by Optuna for this split.
+        y_test_raw : test target array (original scale) -- used for plotting later.
+        pred_test_raw : test prediction array (original scale) -- used for residual/scatter plots.
+        gid_test   : GID array of the test rows (for out-of-fold traceability).
+    Raises an exception if training fails; the caller decides how to handle it.
+# Main benchmark-running function for tabular PyTorch models
+    """Run the full benchmark pipeline for any tabular DL model.
+    This is the central function that each model file (ANN, MLP, ...) will call.
+    It performs the entire process from reading data to writing results.
+        1. Check whether PyTorch can be imported. If not -> write "skipped" results.
+        2. Read the CSV data.
+        3. For each seed:
+           a. Set the seed to ensure reproducibility.
+           b. Split the data into train/val/test.
+           c. Preprocess: scale, one-hot, take the log1p target.
+           d. Convert to PyTorch tensors.
+           e. Use Optuna to optimize hyperparameters:
+              - Optuna is an automatic hyperparameter optimization library.
+              - Each trial, Optuna proposes a set of parameters (lr, wd, number of layers, etc.).
+              - Train the model with that parameter set, evaluate on val.
+              - Optuna learns from previous trials to propose better parameters.
+              - After n_trials, take the model with the lowest val MSE.
+           f. IMPORTANT: Directly save the state_dict of the best model from Optuna,
+              do NOT retrain from scratch. Reason: a new random weight initialization
+              would give a different result, losing the best model already found.
+           g. Predict on train/val/test (on the log scale).
+           h. Clip predictions: bound predicted values within a reasonable range before
+              converting back to the original scale with expm1. For example, if pred_log = 10
+              then expm1(10) = 22026, while real data only reaches ~1000 mm/m (log ~6.9).
+              Clipping at 120% of max(y_train) avoids meaningless exploding values.
+           i. Convert back to the original scale with expm1 then compute metrics.
+        4. Write all results to CSV and JSON files.
+        cfg             : A BenchmarkConfig object holding the full configuration.
+        model_name      : Model name (e.g. "ANN", "ResMLP") recorded in the results.
+        build_model_fn  : Model-building function, takes (num_features, param_dict) -> nn.Module.
+        search_space_fn : Function defining the Optuna search space, takes (trial) -> param_dict.
+        A dict mapping output file name -> the Path of each output file written.
+    # Check whether PyTorch is available
+        set_seed(seed)  # Ensure reproducibility: data split, weight init, batch shuffling
+    # Write all results to file
+# Group K-Fold Cross-Validation (addresses reviewer comment #2)
+    """Run GROUP K-FOLD cross-validation for a tabular DL model.
+    Unlike run_tabular_benchmark (a single holdout split per seed), this function
+    splits the data into cfg.n_splits folds by GID group. Each fold in turn serves as the
+    test set once; the remainder is split into train/val and hyperparameters are tuned with Optuna.
+    Output written:
+        kfold_summary.csv     : one row per fold (train/val/test metrics).
+        kfold_aggregate.csv   : mean +/- standard deviation ACROSS FOLDS.
+        oof_predictions.csv   : out-of-fold predictions (each test GID appears once)
+                                -- used for scatter & residual plots over the full dataset.
+        split_summary.csv     : diagnostics of the split for each fold (checks GID overlap).
+        best_params.json      : best hyperparameters for each fold.
+        run_metadata.json     : metadata (config, status).
+    Note: uses cfg.seeds[0] as the seed for splitting folds, for reproducibility.
+    # Label "GroupKFold" = group k-fold stratified by fc28 (StratifiedKFold on GID,
+    # shuffled by seed), NOT the sklearn.GroupKFold class.
+        # Gather out-of-fold predictions
+        # Collect per-epoch val_loss history of the best model for this fold (for the learning curve)
+        # Collect Optuna trial history for this fold (for optimization history / param importance)
+        # Collect feature importance (permutation) for this fold
+    # Write k-fold results
+    # Aggregate across folds: drop the Fold column from the mean/std computation for cleanliness
+# PART 2 - DATA PREPARATION (merged from buoc_01_code_loc_data.py)
+# List of columns to exclude when training the model.
+# These are identifier columns (GID), the raw time column (dt_days),
+# the target column (y_shrinkage_total_mm_per_m), the transformed target column (y_log1p),
+# and the sequence-marker column (seq_ok) -- not input features.
+# Default list of Deep Learning models supported by the package.
+# Includes both point-wise models (ANN, MLP, ResMLP, FT_Transformer, TabNet)
+# and sequence models (GRU, LSTM).
+    """Configuration for the data-filtering pipeline.
+    Contains all parameters controlling the filtering process, including:
+    - Source Excel file name and output file names
+    - Monotonic-curve filter thresholds (drop_curve_if_any_decrease, eps_y_decrease)
+    - Minimum points per curve (min_points_per_curve, min_points_for_seq)
+    - Whether to median-impute non-core columns (median_impute_noncore)
+    - List of columns that must have a value (core_required)
+    The core_required columns include:
+    - dt_days: time elapsed since measurement started (days)
+    - y_shrinkage_total_mm_per_m: total shrinkage value (mm/m) -- this is the target
+    - w_cm: water/cement ratio
+    - cm: cement content (kg/m3)
+    - fc28: 28-day compressive strength (MPa)
+    - V_S: volume/surface-area ratio (mm)
+    - RH_test: relative humidity during the test
+    - T: temperature during the test (deg C)
+    - t0: age of the concrete when shrinkage measurement started (days)
+    # DEFAULT False: do NOT impute at build time to avoid data leakage.
+    # Median filling is moved to experiment time (fit median ONLY on the train fold)
+    # in common_tabular.impute_train_median / common_sequence_group.build_feature_frames.
+    # NaN values are kept in the CSV so the pipeline can impute correctly per fold.
+    """Configuration for a benchmark experiment.
+    Contains parameters controlling the model training and evaluation process:
+    - data_path: path to the filtered CSV data file
+    - output_dir: directory to write results
+    - split_mode: how to split the data (e.g. 'random', 'group')
+    - seeds: list of seeds to repeat the experiment, ensuring reproducibility
+    - models: list of model names to run
+    - dl_training_style: DL training style ('standard' or custom)
+    - dl_report_mode: reporting mode ('fair' uses the best epoch on val)
+    - dl_preprocessing: how to preprocess the data for DL
+    - n_trials: number of hyperparameter optimization trials (Optuna)
+    - max_epochs: maximum epochs during training
+    - patience: number of epochs to wait before early stopping
+    - dl_batch_size: batch size when training DL
+    - device: compute device ('cpu' or 'cuda')
+    """Check whether two numeric columns have identical values.
+    Used to compare column T (test temperature) and Tcur (curing temperature).
+    If these two columns are identical, drop Tcur to avoid duplicate information
+    (multicollinearity) when feeding into the model.
+        a: first Series column to compare.
+        b: second Series column to compare.
+        tol: allowed tolerance when comparing (default 1e-9).
+        True if all numeric values in both columns are equal (within tol).
+    """Main function of the data-build step.
+    This is the central function that runs the entire data-filtering pipeline.
+    The input is the path to the original Excel workbook; the output is filtered,
+    normalized CSV files ready for the model, along with a
+    build_report.json file recording the filtering process in detail.
+    The pipeline consists of these steps:
+    1. Read two sheets from Excel: 'Shrinkage Info' and 'Shrinkage Data'
+    2. Apply the metadata filter to the Info sheet
+    3. Merge the two tables based on the 'File' column
+    4. Normalize column names and create new features
+    5. Remove duplicates, remove short curves, remove non-monotonic curves
+    6. Drop rows missing core columns, impute median for non-core columns
+    7. Write out 4 output files
+        xlsx_path: Path to the original Excel file (Database SCC.xlsx).
+        output_dir: Directory to write the output CSV and report files.
+        cfg: Pipeline config; defaults are used if None.
+        A dict with paths to 4 output files: 'filtered', 'point', 'seq', 'report'.
+    # === STEP 1: Read the two data sheets from the original Excel workbook ===
+    # The 'Shrinkage Info' sheet holds the concrete mix-design info (one row = 1 sample/curve).
+    # The 'Shrinkage Data' sheet holds the shrinkage-over-time measurements (one row = 1 data point).
+    # Record the number of curves and raw data points before filtering.
+    # Normalize the File column (strip extra whitespace) for accurate merging.
+    # === STEP 2: Filter metadata according to the finalized policy ===
+    # Only keep samples that satisfy ALL of the following conditions:
+    # - type == 'total': only total shrinkage (not autogenous or drying shrinkage separately)
+    # - Curing == 3: standard curing regime (moist curing)
+    # - Not s_036: excludes the s_036 sample group due to abnormal data
+    # - RH_test >= 0.4: relative humidity during the test must be >= 40%
+    # - Coarse_agg > 0 and Fine_agg > 0: must have both coarse and fine aggregate
+    # - fc28 in [17, 110]: 28-day compressive strength within a reasonable range (MPa)
+    # - Tcur in [20, 30]: curing temperature within the standard range (deg C)
+    # - V/S > 11.3: volume/surface-area ratio large enough (mm)
+    # - Cem_type == 1: only Type I Portland cement
+    # Filter the Data table: keep only rows whose File is in the filtered list from Info.
+    # Record the count after metadata filtering.
+    # === STEP 3: Determine required columns and check required columns exist ===
+    # Required columns from the Info table: File, ID, w/cm, cm, fc28, V/S, RH_test, T, Tcur, t0.
+    # Required columns from the Data table: File, dt (days), Shrinkage strain (mm/m).
+    # Optional columns -- may or may not be present in the workbook.
+    # Check whether the required columns exist in the data.
+    # === STEP 4: Merge the two tables and normalize columns ===
+    # Merge the Data table with the Info table based on the 'File' column (inner join).
+    # Check whether columns T and Tcur are identical.
+    # If identical, drop Tcur to avoid duplicate information (multicollinearity).
+    # Build the output DataFrame with normalized column names.
+    # The GID column is the unique key for each curve (File + ID), used for groupby.
+    # dt_days column: time elapsed since shrinkage measurement started (days).
+    # y_shrinkage_total_mm_per_m column: total shrinkage value (mm/m) -- absolute value taken.
+    # Main feature columns from the Info table, renamed to fit Python conventions.
+    # Only keep Tcur if it differs from T (avoids multicollinearity).
+    # Add optional columns (if present in the workbook).
+        """Add an optional column to the output DataFrame if it exists in the merged data."""
+    # === Create new features (feature engineering) ===
+    # dt_log1p: log(1 + dt_days) -- the log transform helps the model handle
+    # the right-skewed distribution of dt_days better.
+    # age_days: the concrete's actual age = t0 + dt_days.
+    # age_log1p: log(1 + age_days) -- similar to dt_log1p.
+    # Compute the total supplementary cementitious material (SCM) and OPC (pure Portland cement) ratio.
+        # Compute the mass (kg) of each supplementary component based on the cm content.
+    # Compute the fine-aggregate/cement and coarse-aggregate/cement ratios.
+    # === STEP 5: Remove duplicates, short curves, and non-monotonic curves ===
+    # Remove duplicate records (same GID and dt_days), keeping the first record.
+    # Remove curves with too few data points (fewer than min_points_per_curve).
+    # A curve that's too short doesn't have enough information for the model to learn the shrinkage trend.
+    # Remove curves that violate monotonicity.
+    # Total shrinkage should theoretically increase monotonically over time.
+    # If y decreases as dt increases, this could be a measurement error or abnormal data.
+        # Flag steps where dt increases but y decreases (violates monotonicity).
+    # Flag which curves have enough points for the sequence model (>= min_points_for_seq).
+    # The GRU/LSTM models need long-enough curves to learn the pattern over time.
+    # === STEP 6: Handle missing values ===
+    # Cast required core columns to numeric type.
+    # Remove rows missing a value in a core (required) column.
+    # Core columns are essential information and cannot be imputed.
+    # Impute median for non-core (optional) columns if enabled.
+    # Non-core columns may have missing values; the median is used to fill them in,
+    # keeping the model from losing data while remaining statistically reasonable.
+    # Re-sort by GID and dt_days, reset index.
+    # === STEP 7: Write output files ===
+    # File 1: data_train_total_filtered.csv - the fully filtered data.
+    # File 2: data_train_total_ready.csv - adds the y_log1p column for the point-wise model.
+    # y_log1p = log(1 + y) makes the target distribution closer to normal, improving training.
+    # File 3: data_train_total_ready_seq.csv - only curves long enough for the sequence model.
+    # File 4: build_report.json - a detailed report of the filtering process.
+    # Records the filter policy, sample counts at each step, and imputation info
+    # to ensure reproducibility and traceability when needed.
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+# PART 3 - Preprocessing specific to SEQUENCE (Dataset/DataLoader) + train_sequence_model
+# (with early stopping, unlike train_sequence_history used in file 13), merged from
+    """Builds the feature matrix for each set.
+    1. Removes the columns in EXCLUDE_COLUMNS (target, GID, etc.).
+    2. Normalizes (StandardScaler) the numeric columns: fit ONLY on train,
+       then transform both val and test. This is the golden rule to avoid
+       data leakage - val/test must not influence the fitting process.
+    3. One-hot encoding for categorical columns. Ensures val/test have the same
+       columns as train (reindex), filling 0 for missing values.
+    Returns: (train_feat, val_feat, test_feat, list_of_column_names)
+    # Fill missing values (NaN) using the median computed ONLY on train (avoids leakage).
+    # Normalize numeric columns: fit on train, transform on all
+    # One-hot encoding for categorical columns
+        # Ensure val/test have the same columns as train, fill 0 for missing columns
+    # Concatenate numeric and categorical columns into one complete feature matrix
+    """Converts a DataFrame into a list of (X, y) sequences per GID.
+    Each GID forms a time series: rows are sorted by dt_days
+    (measurement day), forming a sequence of time steps.
+    log1p transform for the target:
+        If use_log1p=True (default), the target y is converted to log1p:
+            y_transformed = log(1 + clip(y, 0))
+        Why is log1p needed?
+        - The shrinkage value has a right-skewed distribution:
+          most values are small, a few values are very large.
+        - log1p compresses the value range, making the gradient more stable during training.
+        - Without log1p, large values would produce very large gradients, potentially
+          preventing the model from converging (exploding gradient).
+        - clip(y, 0) ensures there are no negative values before taking the log.
+        - Matches the tabular pipeline to ensure the same target transform.
+        When computing the final metric, expm1 (the inverse of log1p) must be used
+        to convert back to the original scale (mm/m).
+    # Create a __row_id__ column to map between the original df and features_df after sorting
+    # Sort by GID and dt_days to create the time series in the correct order
+    # Merge features by __row_id__ to keep the correct order after sorting
+        # Use log1p(clip(y, 0)) instead of the raw value so the loss is smaller, the model learns better.
+        # Use clip(lower=0) matching the tabular pipeline to ensure the same target transform.
+        y = np.log1p(np.clip(y_raw, 0.0, None)) if use_log1p else y_raw
+        sequences_y.append(y)
+    """PyTorch Dataset for sequence data.
+    This is a wrapper class so the PyTorch DataLoader can fetch each sequence
+    by index. Each element is a pair (X, y) with:
+        - X: 2D array (n_time_steps, n_features)
+        - y: 1D array (n_time_steps,) containing the target at each step
+    """Combines multiple sequences of different lengths into a batch via padding and mask.
+    Problem: sequences in the same batch can have different lengths
+    (e.g. GID A has 5 steps, GID B has 8 steps). PyTorch requires the tensor
+    to have a fixed size in each dimension.
+    Solution - Padding and Mask:
+    1. Padding: Add zeros to the end of shorter sequences so all of them have the same length
+       as the longest sequence in the batch. This 0 value is fake, has no meaning.
+    2. Mask: Create a binary (0/1) tensor marking which positions are real data (1)
+       and which positions are padding (0). When computing loss, only compute on positions where mask=1.
+        - batch_x: tensor (batch_size, max_len, feat_dim) - padded features
+        - batch_y: tensor (batch_size, max_len) - padded target
+        - batch_mask: tensor (batch_size, max_len) - mask marking real positions
+    # Find the longest length in the batch to pad the shorter sequences
+    # Initialize with 0: padding positions will automatically be 0
+    for i, (x, y) in enumerate(zip(xs, ys)):
+        # Only fill real data into the beginning part, leave the rest as 0
+        batch_y[i, :length] = y
+        # Mark positions with real data = 1.0
+    """Computes Mean Squared Error only on positions with real data (mask=1).
+    Why is a mask needed?
+    Because sequences in a batch have different lengths, they have been padded with 0.
+    If MSE were computed on padding positions too, the model would be "penalized" for predicting
+    something other than 0 at those padding positions - this is meaningless and would bias
+    the training process. The mask helps skip padding positions, computing loss only on
+    real data.
+    Formula: sum((pred - target)^2 * mask) / sum(mask)
+    clamp_min(1.0) avoids dividing by 0 when there are no valid positions.
+    # Multiply by mask: padding positions (mask=0) will have loss = 0
+    # Divide by the total mask (number of real positions) instead of the total number of elements
+    """Runs the model over the whole DataLoader and collects predictions.
+    Sets the model to eval mode (disables dropout, batch norm uses running stats)
+    and uses torch.no_grad() to skip gradient computation, saving memory.
+    Only takes values at positions where mask > 0.5 (real data, not padding).
+    Returns: (y_true, y_pred) as 1D arrays in log1p space.
+            # Only take predictions at positions with real data (not padding)
+    """Measures feature importance via permutation importance for the sequence model.
+    For each feature, shuffle its value ALONG THE TIME AXIS
+    within each sequence (keeping each sample's length unchanged, only breaking the time
+    order of that particular feature), then measure how much the MSE on val increases relative to
+    the baseline. Reuses the ALREADY-TRAINED model of the current fold (does not
+    retrain).
+    """Trains the sequence model with overfitting-prevention techniques.
+    This function uses several important deep learning techniques:
+       - Adam is the most popular optimization algorithm for DL, combining momentum
+         and adaptive learning rate (automatically adjusting the learning speed for each parameter).
+       - AdamW is an improved version with decoupled weight decay,
+         giving more effective regularization than the original Adam.
+       - lr (learning rate): learning speed, determines the step size when updating weights.
+       - weight_decay (wd): penalty coefficient for large weights, helps avoid overfitting.
+       - Automatically reduces the learning rate when val loss stops improving.
+       - factor=0.5: each time it reduces, new lr = old lr * 0.5.
+       - patience=max(2, patience//3): how many epochs to wait before reducing.
+       - Helps the model "fine-tune" once it's close to convergence.
+       - Clips the gradient if its norm exceeds 1.0.
+       - Why? In sequence models (RNN, LSTM), the gradient can explode
+         (exploding gradient) when propagated through many time steps.
+       - Clipping helps stabilize the training process.
+       - Stops training early if val loss doesn't improve after 'patience' epochs.
+       - Why? After a while, the model starts "memorizing" the training set instead of
+         "learning" the general pattern (overfitting). Val loss will increase.
+       - Saves the best weights (best_state) and restores them after stopping.
+    Returns: (best_model, best_epoch, best_val_loss, val_loss_history)
+    val_loss_history contains the val_loss of EACH epoch that ran (for plotting the learning curve).
+    # Initialize AdamW with learning rate and weight decay from Optuna
+    # Scheduler automatically reduces lr when val loss stops improving
+        # Training mode: enables dropout, batch norm uses batch stats
+            # Clear old gradients before computing new ones
+            # Compute loss only on real positions (not padding)
+            # Backpropagate to compute the gradient
+            # Clip the gradient to prevent exploding
+            # Update the weights
+        # Evaluate on the validation set after each epoch
+        # Inform the scheduler of the current val loss
+            # Found a better model, save its weights
+            # Val loss did not improve, increment the wait counter
+                # Waited long enough, stop early (early stopping)
+    # Restore the best weights (not the final weights)
+# PART 4 - LSTM architecture (class + build_lstm only; reuses the REPRESENTATIVE
+# hyperparameters cached from the k-fold of file 08, does not rerun Optuna)
+    """LSTM regression model using a sequence-to-sequence (seq2seq) architecture.
+    This class encapsulates the entire LSTM neural network architecture used to predict
+    the shrinkage value at EVERY time step in the sequence (not just the last step).
+    Internal architecture:
+    1. LSTM layer (nn.LSTM):
+       - Receives the input feature sequence, processing each time step sequentially
+       - At each step, applies 3 gates (forget + input + output) and updates the
+         cell state to manage long-term memory
+       - Can be stacked into multiple layers (num_layers > 1) to learn deeper representations
+       - When num_layers > 1: the lower layer's output is the upper layer's input, dropout is
+         applied BETWEEN layers (not applied at the last layer)
+       - Fully connected layer converting hidden state -> predicted
+         shrinkage value
+       - Mapping: hidden_dim dimensions -> 1 dimension (1 scalar value)
+       - Uses the SAME set of weights for every time step (weight sharing)
+    Structural comparison with GRU (buoc_07):
+       - GRU returns: (output, h_n) - only a hidden state
+       - LSTM returns: (output, (h_n, c_n)) - BOTH hidden state AND cell state
+       - However, the FC head part is identical: it only uses output (the hidden state at
+         each step) to predict, not directly using the cell state or h_n/c_n
+    Data sizes (tensor shapes):
+    Input x:
+        - batch_size: number of sequences processed simultaneously. E.g. 16 sample groups (GID) at once
+        - seq_len:    sequence length (number of time steps), already padded to the same length.
+                      E.g. 50 measurement days, shorter sequences are padded with zeros
+        - input_dim:  number of features per step. E.g. [age, temperature, humidity, ...] = 8
+    Hidden state after LSTM:
+        - Contains the hidden state at EVERY time step (used for seq2seq prediction)
+        - The FINAL hidden state of each layer (not used in seq2seq)
+        - The FINAL cell state of each layer (not used in seq2seq)
+    Output (predictions):
+        - Each element is 1 predicted shrinkage value at the corresponding time step
+    Constructor parameters:
+    input_dim  (int):   Number of input features per time step.
+                        Automatically determined from the training data.
+    hidden_dim (int):   Size of the hidden state AND cell state (both the same
+                        size). A larger value -> a more powerful model but slower
+                        and more prone to overfitting. Commonly tried: 32, 48, 64.
+    num_layers (int):   Number of stacked LSTM layers. 1 layer is usually enough for
+                        simple problems; 2 layers help learn more abstract representations.
+    dropout    (float): Dropout rate (0.0 to 1.0) BETWEEN LSTM layers.
+                        Randomly "disables" neurons during training to fight overfitting.
+                        Only has an effect when num_layers > 1 (PyTorch does not apply
+                        dropout at the last layer).
+        # Call the parent class nn.Module's __init__ - required so PyTorch manages
+        # weights and supports .to(device), .parameters(), .state_dict(), etc.
+        # Main LSTM layer: processes the sequence over time steps.
+        # DIFFERENCE from GRU (buoc_07):
+        #   - LSTM maintains BOTH hidden state (h) AND cell state (c) at each step
+        #   - Has 3 gates instead of 2 -> about 33% more parameters
+        #   - With the same hidden_dim=64: GRU has ~3*64*64 = 12,288 gate parameters,
+        #     LSTM has ~4*64*64 = 16,384 gate parameters (4 matrices instead of 3)
+        # Parameters:
+        #   input_size  = input_dim  : number of input features per step
+        #   hidden_size = hidden_dim : size of the hidden state AND cell state
+        #   num_layers  : number of stacked LSTM layers (stacked LSTM)
+        #   dropout     : dropout rate between layers (0 if only 1 layer)
+        #   batch_first = True : the input has shape (batch, seq, feat) instead of
+        #                 (seq, batch, feat). This is more intuitive.
+        # FC Head: a linear layer mapping the hidden state -> 1 predicted value.
+        # Exactly identical to GRU (buoc_07): the same Linear(hidden_dim, 1) structure
+        # since both GRU and LSTM output a hidden state of the same size.
+        """Forward pass - computes the prediction from the input.
+        This is the function PyTorch calls automatically when we write model(x).
+        It describes HOW data flows through the model from input to output.
+        DIFFERENCE from GRU:
+        - GRU: self.gru(x) returns (output, h_n)
+        - LSTM: self.lstm(x) returns (output, (h_n, c_n))
+          where c_n is the final cell state (long-term memory)
+        - However, we only use output (the hidden state at every step) so
+          the code looks nearly identical.
+            x: Input tensor, shape (batch_size, seq_len, input_dim).
+               Each element x[i, t, :] is the feature vector of sequence i
+               at time step t.
+            Prediction tensor, shape (batch_size, seq_len).
+            Each element output[i, t] is the predicted shrinkage value of sequence
+            i at time step t.
+        # Step 1: Pass the sequence through LSTM
+        # self.lstm(x) returns a tuple of 2 parts:
+        #   - hidden: (batch, seq_len, hidden_dim) - the hidden state AT EVERY step
+        #             This is the main output, containing information "filtered" from the cell state
+        #             via the output gate, ready for prediction.
+        #   - _     : tuple (h_n, c_n) - the final states:
+        #       h_n: (num_layers, batch, hidden_dim) - the final hidden state of each layer
+        #       c_n: (num_layers, batch, hidden_dim) - the final cell state of each layer
+        #     We don't need h_n and c_n because we use a seq2seq architecture (predicting at
+        #     every step, not just the last one).
+        # Step 2: Map the hidden state -> predicted value via the FC head
+        #   The Linear layer applies y = W * h + b to each hidden vector at each
+        #   time step, using the SAME set of weights W and bias b.
+        # .squeeze(-1): removes the last dimension of size=1
+        #   Result: a 2D tensor, each element is 1 predicted shrinkage value.
+    """Builds an LSTM model from the hyperparameters suggested by Optuna.
+    This function is the "bridge" between Optuna (hyperparameter search) and the model architecture.
+    Every time Optuna tries a new parameter set, this function creates the corresponding
+    LSTM model to train and evaluate.
+        input_dim: Number of input features (automatically determined from the data).
+        params:    Dict containing the hyperparameters suggested by suggest_params().
+                   Must contain: hidden_dim, num_layers, dropout.
+        nn.Module: An LSTMRegressor instance ready for training.
+        hidden_dim=int(params["hidden_dim"]),   # Cast to int since Optuna may return a float
+        num_layers=int(params["num_layers"]),    # Number of LSTM layers (1 or 2)
+        dropout=float(params["dropout"]),        # Dropout rate (0.05 to 0.30)
+# PART 5 - (A) Data description: value-range table + histogram + correlation
+# Display labels (with units) for the variables.
+    "y_shrinkage_total_mm_per_m": "Total shrinkage (×10⁻⁶)",
+    "dt_days": "Drying time t–t₀ (days)",
+    "fc28": "28-day strength f_cm28 (MPa)",
+    "w_cm": "W/CM ratio (w/cm)",
+    "cm": "CM content (kg/m³)",
+    "V_S": "Volume/surface ratio V/S (mm)",
+    "RH_test": "Relative humidity RH",
+    "T": "Test temperature T (°C)",
+    "t0": "Age at start of drying t₀ (days)",
+    "Tcur": "Curing temperature (°C)",
+    "age_days": "Sample age (days)",
+    "water": "Water (kg/m³)",
+    "Slag": "Slag (%)",
+    "agg_total": "Total aggregate (kg/m³)",
+    "sandrate": "Sand ratio",
+            "Variable": short_label(c),
+        ax.set_ylabel("Frequency", fontsize=10)
+    fig.suptitle(f"SCC shrinkage data distribution (N = {len(df)} measurement points, {df['GID'].nunique()} samples)",
+    cbar.set_label("Pearson correlation coefficient", fontsize=10)
+    ax.set_title("Correlation matrix of variables (entire database)", fontsize=13)
+# PART 6 - (B) Shrinkage development curve over time: measured vs predicted (LSTM)
+N_CURVES = 6  # number of representative samples for the development curve
+    """Predict the shrinkage curve for 1 GID, return (dt_days, y_meas, y_pred)."""
+    """Select k test GIDs with sufficiently long sequences, spread evenly by end-of-period shrinkage magnitude."""
+    if len(info) < k:  # relax the condition if not enough
+    info.sort(key=lambda r: r[2])  # sort by end-of-period shrinkage
+    # take k samples spread evenly by magnitude percentile
+        ax.plot(dt, ym, "o", color="#1f3b6f", ms=6, label="Measured (experiment)")
+        ax.plot(dt, yp, "-", color="#c0504d", lw=2.2, label="Predicted (LSTM)")
+        ax.set_xlabel("Drying time t–t₀ (days)", fontsize=10)
+        ax.set_ylabel("Shrinkage (×10⁻⁶)", fontsize=10)
+                     f"w/cm={sub['w_cm']:.2f}\nSample R² = {r2:.3f}", fontsize=10)
+    fig.suptitle(f"Shrinkage development curve over time — measured vs predicted (LSTM, holdout test samples)\n"
+                 f"Global test: R² = {test_metrics['R2']:.3f}, RMSE = {test_metrics['RMSE']:.1f} ×10⁻⁶",
+# PART 7 - MAIN ORCHESTRATION (hand-written, not taken from the original file)
+        print(f"  [warning] {p} not found, using default parameters for {key}.")
+    """Train LSTM (representative hyperparameters) on train + early stopping on val.
+    Return (model, test_df, test_feat, log_cap, test_metrics).
+        print(build_torch_runtime_message("LSTM (report figures)", TORCH_IMPORT_ERROR))
+    print("14_REPORT_FIGURES: Data description (A) + shrinkage curve over time (B)")
+    print(f"Data: {len(tab_df)} measurement points | {tab_df['GID'].nunique()} samples (GID)")
+    print(f"Saved value-range table (Table 1): {tab_path}")
+    print(f"Saved {f10.name}, {f11.name}")
+    print("\nTraining LSTM for the shrinkage curve over time ...")
+    print(f"Representative hyperparameters ({FOLD_LSTM}): {params}")
+    print(f"Saved {f12.name} for the representative GIDs: {gids}")
+    print(f"File 14 complete. Figures: {fig_dir} | Tables: {tab_dir}")
+    print(f"\n[runtime] {(_t.time() - _t0) / 60.0:.2f} min", flush=True)

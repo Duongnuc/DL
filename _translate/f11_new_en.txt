@@ -1,0 +1,91 @@
+"""Merged file - 11_empirical_formula.py
+This file MERGES (without omission) content from buoc_20_empirical_baseline.py
+(a benchmark using empirical physical formulas: ACI 209R-92, B3, B4, fib
+MC2010), plus buoc_01_code_loc_data.py to self-prepare the data.
+Unlike files 01-10 (machine learning models that need torch/Optuna), this file ONLY uses
+numpy/pandas to compute the current design formulas on EACH row of data, then
+score R2/RMSE/MAE to compare fairly against the deep learning models (step
+12_tong_hop_so_sanh.py will read this result back). Since it doesn't use torch, this file
+does NOT need the shared pipeline common_tabular.py/common_sequence_group.py.
+package), and consists of 3 parts:
+  2. Define the 5 empirical formulas (ACI 209R-92, B3, B4, B4 drying only, fib
+     MC2010) - from buoc_20_empirical_baseline.py.
+  3. Compute predictions for each row, score R2/RMSE/MAE for both the standard version and the
+     calibrated version (multiplied by a least-squares-optimal factor), over the entire data AND
+     over the seq_ok=1 subset (the same set of points GRU/LSTM/TCN are scored OOF on, for a
+     fair comparison), then PRINT THE RESULTS to the console.
+Intermediate CSV files are still written to the hidden _cache/empirical/ directory so the downstream summary file
+(12_tong_hop_so_sanh.py) can read them back without needing to recompute
+from scratch.
+Run: python 11_empirical_formula.py
+# PART 1/3 - DATA PREPARATION (merged from buoc_01_code_loc_data.py)
+# Already contains "import numpy as np", "import pandas as pd", "from pathlib
+# import Path" - no torch needed so no need to import TAB_ENGINE/SEQ_ENGINE first.
+# PART 2/3 - 5 EMPIRICAL FORMULAS (merged from buoc_20_empirical_baseline.py)
+"""Step 20 - Empirical formula benchmark: ACI 209R-92, B3, B4, fib MC2010.
+The most common objection to a machine-learning shrinkage prediction paper: where exactly does the deep learning model outperform
+the current design formulas (ACI 209, B3, B4, fib MC2010)? This is not
+an ML model, but an empirical physical formula, so it serves as a benchmark
+without breaking the "deep learning only" constraint.
+Fair comparison method: compute each formula for EVERY row in the dataset, then
+score R2/RMSE against the measured value, comparing against the pooled out-of-fold metric of the
+deep learning models (every GID is tested exactly once within the group 5-fold).
+Formula sources (cross-checked against the originals, PDFs stored in _tmp_refs/):
+  - ACI 209R-92: ACI Committee 209 report.
+  - B3: Bažant & Baweja, ACI SP-194 / RILEM recommendation (drying shrinkage only).
+  - B4: RILEM TC-242-MDC, Mater Struct 48:753-770 (2015) - drying + autogenous.
+  - fib MC2010: Eqs. 5.1-76..83 - basic (autogenous) + drying.
+Honest assumptions (stated explicitly in the paper):
+  - No slump/air content data (ACI: coefficient = 1.0).
+  - Cement type: B3 Type I (α1=1), B4 type R, MC2010 class 42.5N; moist curing
+    (α2=1). B4 aggregate: k_τa = k_εa = 1.0 (parent rock type unknown per Table 6).
+  - w/c taken as w/cm and c as the total binder content (SCC uses a lot of SCM).
+  - Two variants reported per formula: (a) standard; (b) calibrated, scaled entirely
+    by a least-squares-optimal factor on the data (the best possible advantage
+    that can be given to the empirical formula).
+Run:  python buoc_20_empirical_baseline.py --smoke    (check 1 curve)
+      python buoc_20_empirical_baseline.py            (run everything)
+    """ACI 209R-92 shrinkage strain (×10^-6) for one row (one time point).
+    eps_shu = 780e-6 * gamma_sh, gamma_sh = product of the correction factors.
+    dt = float(row["dt_days"])           # drying time t - tc (days)
+    tc = float(row["t0"])                # age at start of drying (days)
+    # Time: f = 35 for 7-day moist curing (ACI standard value)
+    # Moist-curing coefficient based on the age at start of drying tc (ACI 209 Table)
+    # Relative humidity coefficient h (%): RH_test is a fraction -> multiply by 100
+    # Volume-to-surface ratio coefficient V/S (mm)
+    # Fine aggregate ratio coefficient psi (%): sandrate is a fraction -> multiply by 100
+    # Binder content coefficient c (kg/m3)
+    # No slump or air content -> coefficient = 1.0 (assumption)
+    eps_shu = 780.0 * gamma_sh          # units ×10^-6
+# Shape factor k_s (B3 Eq. 1.12 = B4): 1 infinite slab, 2 infinite cylinder,
+# 3 infinite square prism, 4 sphere, 5 cube - matches the Shape_factor column encoding.
+    """B3 (Bažant-Baweja, SI) DRYING shrinkage (×10^-6); Type I, moist curing."""
+    fc = float(row["fc28"])              # MPa (mean strength)
+    eps_sinf = 0.019 * w ** 2.1 * fc ** (-0.28) + 270.0   # ×10^-6, alpha1=alpha2=1
+    h = float(row["RH_test"])                              # fraction, <=0.98 in the data
+# B4 (RILEM TC-242-MDC 2015), cement type R; k_tau_a = k_eps_a = 1.0
+    """B4: returns (drying, autogenous) ×10^-6, measured from time t0."""
+    def e_rel(t: float) -> float:                          # E(t)/E28, B4 uses 6/7
+    # --- autogenous (computed by absolute age t, minus the part that occurred before t0) ---
+    """B4 TOTAL shrinkage = drying + autogenous."""
+    """B4 DRYING part ONLY - the autogenous part extrapolates very strongly when w/c << 0.38."""
+    """fib MC2010 TOTAL shrinkage = basic + drying (×10^-6), measured from time ts=t0."""
+    # basic (autogenous), Eq. 5.1-78..79 - measured from ts so subtract beta_bs(ts)
+        beta_rh = -0.25                                    # swelling case
+    "B4 (drying only)": b4_drying_shrinkage,
+    """Simple R2/RMSE/MAE (different from regression_metrics in common_tabular.py:
+    no NRMSE_IQR_pct since this isn't an ML pipeline with train/val/test)."""
+# PART 3/3 - ACTUAL RUN: COMPUTE FORMULAS + SCORE + PRINT RESULTS
+    print("[Empirical formula] STEP 1/2: Prepare data (filtering + feature engineering)")
+    y = df["y_shrinkage_total_mm_per_m"].to_numpy(float)
+    print(f"Finished preparing data: {data_outputs['point']} ({len(df)} points)")
+    print("[Empirical formula] STEP 2/2: Compute 5 formulas + score R2/RMSE/MAE")
+    print(f"Seq subset (same points GRU/LSTM/TCN score OOF): {int(mask.sum())}/{len(df)} points")
+        k = float(np.dot(y, pred) / np.dot(pred, pred)) if np.dot(pred, pred) > 0 else 1.0
+            {"Model": f"{name} (standard)", **metrics(y, pred), "scale": 1.0},
+            {"Model": f"{name} (calibrated)", **metrics(y, k * pred), "scale": k},
+            {"Model": f"{name} (standard, seq subset)", **metrics(y_s, pred_s), "scale": 1.0},
+            {"Model": f"{name} (calibrated, seq subset)", **metrics(y_s, k_s * pred_s), "scale": k_s},
+    print("\n=== Empirical formulas on the entire dataset (comparison with DL OOF) ===")
+    print(f"\nWritten: {out_dir}")
+    print("\nFinished running the entire pipeline for the empirical formulas.")

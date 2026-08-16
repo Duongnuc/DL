@@ -1,0 +1,57 @@
+"""Merged file - 10_gbdt.py
+This file MERGES (without omission) content from 2 original files in the original
+research pipeline: buoc_21_gbdt_kfold.py (GBDT models - XGBoost + LightGBM - evaluated
+via group k-fold, serving as a benchmark against the Deep Learning models) and
+buoc_26_robustness_gbdt.py (checks the robustness of the group k-fold results: splitting
+folds by DATA SOURCE instead of by GID, and varying the split seed), plus
+the shared pipeline common_tabular.py, common_console_summary.py and
+Reason a GBDT benchmark is needed: gradient-boosted decision trees (GBDT) often beat
+Deep Learning on tabular data (Shwartz-Ziv & Armon 2022; Grinsztajn
+2022). The paper needs this benchmark to compare fairly against the 9 DL models, using the
+same fold splitting, preprocessing, target, and Optuna budget (8 trials/fold).
+This file RUNS STANDALONE (does not import any other .py file in this translated
+package), and consists of 4 parts:
+  2. Hyperparameter search space definition + training function for XGBoost/LightGBM.
+  3. Run GROUP K-FOLD (5 folds, Optuna 8 trials/fold) for both models, THEN
+     run 2 robustness checks: (A) splitting folds by data source (seed 42),
+     (B) splitting folds by GID with seed 43 and 44 (in addition to the official seed 42).
+  4. Print all results (R2/RMSE/MAE, robustness summary table) to the
+     console - not just writing to file.
+Intermediate CSV/JSON files are still written to the hidden _cache/gbdt/ directory so
+the downstream summary file (12_tong_hop_so_sanh.py) can read them back without
+having to retrain from scratch.
+Run: python 10_gbdt.py
+# GBDT does not use torch, but it is still imported first to keep the import order STABLE
+# exactly like files 01-06 (torch before numpy/pandas/sklearn on Windows), and
+# to allow reuse of the shared fold-splitting/metrics functions (group_kfold_split_indices,
+    te = regression_metrics(y_test_raw, pred_test_raw)
+# PART 3/4 - GBDT: XGBoost + LightGBM + robustness checks (merged from buoc_21, buoc_26)
+# Shared configuration for GBDT (used by both the main k-fold part and the robustness part)
+N_TRIALS = 8            # same budget as the DL models (buoc_12)
+MAX_ROUNDS = 3000       # equivalent to max_epochs; early stopping decides the actual number of rounds
+EARLY_STOP = 100        # equivalent to patience
+VAL_FRACTION = 0.1765   # val split fraction within train/val when re-splitting by source
+# Hyperparameter search space + training function for each GBDT family
+# (merged from buoc_21_gbdt_kfold.py)
+    # Uses the native lgb.train API (the sklearn wrapper of lightgbm 4.5 conflicts
+    # with newer scikit-learn since the force_all_finite parameter was renamed).
+    """One fold: Optuna -> best model -> metrics in the original scale."""
+    """Run k-fold for one GBDT model (output format matching run_tabular_kfold)."""
+# Robustness check for GBDT (merged from buoc_26_robustness_gbdt.py)
+# (A) Split folds by DATA SOURCE instead of by GID (the 3rd leakage-check rung).
+# (B) Vary the split seed (43, 44 besides the official 42) with folds by GID.
+# The xgb_fit/lgbm_fit/MODELS functions here carry the "_seeded"/"_ROBUST" suffix because
+# buoc_26 redefines the same function names but with a DIFFERENT signature (added seed parameter) -
+# keeping the same name would overwrite the original from buoc_21 and break the main pipeline.
+    """Like group_kfold_split_indices but grouped by data SOURCE (fc28-stratified partition)."""
+# PART 4/4 - ACTUAL RUN: GROUP K-FOLD (2 MODELS) + ROBUSTNESS CHECKS + PRINT RESULTS
+    print("[GBDT] STEP 1/3: Prepare data (filtering + feature engineering)")
+    print(f"[GBDT] STEP 2/3: Group K-Fold ({N_SPLITS} folds, Optuna {N_TRIALS} trials/fold, XGBoost + LightGBM)")
+    print("[GBDT] STEP 3/3: Robustness check (split by data source + varying seed)")
+    print(f"Data: {len(df)} points, {df['GID'].nunique()} GID, {src.nunique()} data sources")
+    print("\n(A) Split folds by data SOURCE (seed 42):")
+    print("\n(B) Split folds by GID with alternate seeds (43, 44):")
+    print("\nRobustness check summary table (GroupKFold seed 42 is the official result from STEP 2/3):")
+    print(f"Written: {robust_path}")
+    print("\nFinished running the entire GBDT pipeline (k-fold XGBoost+LightGBM + 2 robustness checks).")
+    print(f"\n[runtime] {(time.time() - _t0) / 60.0:.2f} minutes", flush=True)

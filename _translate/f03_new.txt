@@ -1,0 +1,338 @@
+"""File gop - 03_resmlp.py
+goc: buoc_04_resmlp.py, buoc_11_leakage_resmlp.py (kiem tra leakage), cong voi pipeline dung chung common_tabular.py,
+  2. Dinh nghia kien truc mo hinh + khong gian sieu tham so Optuna - tu buoc_04_resmlp.py.
+duoc ghi vao thu muc an _cache/resmlp/ de cac file tong hop phia sau (12, 13) co the
+Chay: python 03_resmlp.py
+    te = regression_metrics(y_test_raw, pred_test_raw)
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+# PHAN 3/4 - KIEN TRUC MO HINH + SEARCH SPACE (gop tu buoc_04_resmlp.py)
+Mô hình ResMLP — Residual Multi-Layer Perceptron (Perceptron đa tầng có kết nối tắt).
+TÊN ĐẦY ĐỦ VÀ Ý NGHĨA
+  - MLP (Multi-Layer Perceptron): mạng nơ-ron nhiều tầng, mỗi tầng là một
+    phép biến đổi tuyến tính (nhân ma trận + cộng bias) rồi qua hàm kích
+    hoạt phi tuyến. Đây là kiến trúc nền tảng nhất của deep learning.
+  - Residual (phần dư): kỹ thuật "kết nối tắt" (skip connection) cho phép
+    dữ liệu đi vòng qua một số tầng mà không bị biến đổi, rồi cộng lại
+    với kết quả biến đổi. Kỹ thuật này lần đầu được đề xuất trong ResNet
+    (He et al., 2015) và đã cách mạng hóa việc huấn luyện mạng sâu.
+SKIP CONNECTION LÀ GÌ? — GIẢI THÍCH CHO NGƯỜI MỚI
+Hãy tưởng tượng bạn truyền tin nhắn qua 10 người nối tiếp nhau (giống trò
+"truyền tin nhắn"). Qua mỗi người, tin nhắn có thể bị méo đi một chút.
+Qua 10 người, tin nhắn gốc có thể bị sai hoàn toàn.
+Skip connection giống như bạn cho người thứ 1 gửi TRỰC TIẾP tin nhắn cho
+người thứ 3, thứ 5, thứ 7... Như vậy, dù tin nhắn qua nhiều người, bản
+gốc vẫn luôn được giữ lại và so khớp.
+Trong mạng nơ-ron:
+  - "Tin nhắn" = tín hiệu dữ liệu (trong lượt truyền xuôi - forward pass)
+    hoặc tín hiệu gradient (trong lượt truyền ngược - backward pass).
+  - Không có skip connection: gradient phải đi qua TỪNG tầng, mỗi tầng
+    nhân gradient với một số nhỏ hơn 1 → qua nhiều tầng, gradient → 0
+    (hiện tượng "vanishing gradient" = gradient biến mất). Khi gradient ≈ 0,
+    các tầng đầu tiên không học được gì vì không nhận được phản hồi.
+  - Có skip connection: gradient có "đường cao tốc" đi thẳng về tầng đầu,
+    không bị nhân nhỏ dần → mạng sâu vẫn huấn luyện hiệu quả.
+Công thức toán học của một ResBlock:
+  trong đó:
+    x   = đầu vào của block (giữ nguyên, không biến đổi)
+    F(x)= phép biến đổi qua 2 tầng FC + BN (phần "residual" = phần dư)
+    x + F(x) = cộng trực tiếp vector (element-wise addition)
+  Nếu F(x) ≈ 0 (block không học được gì hữu ích), thì output ≈ ReLU(x),
+  tức là dữ liệu vẫn được truyền qua nguyên vẹn. Đây là lý do skip
+  connection "không bao giờ làm hại" — trong trường hợp xấu nhất, block
+  đơn giản trở thành hàm đồng nhất (identity function).
+KIẾN TRÚC CHI TIẾT — SƠ ĐỒ VỚI VÍ DỤ SỐ CỤ THỂ
+Giả sử: input_dim=30 (30 đặc trưng đầu vào), d=160, blocks=3, dropout=0.1
+BƯỚC 1 — Input Block (chuyển đổi kích thước):
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  Input: vector 30 chiều (30 đặc trưng của 1 mẫu dữ liệu)         │
+  │    ↓                                                               │
+  │  FC(30→160): nhân ma trận 30×160, vector 30 chiều → 160 chiều     │
+  │    ↓         (ma trận có 30×160 = 4.800 trọng số cần học)         │
+  │  BatchNorm(160): chuẩn hóa 160 giá trị về trung bình≈0, std≈1    │
+  │    ↓             (giúp huấn luyện ổn định, tránh giá trị quá lớn) │
+  │  ReLU: max(0, x) — nếu âm thì cho bằng 0, dương thì giữ nguyên  │
+  │    ↓   (tạo tính phi tuyến — nếu không có, nhiều tầng FC nối nhau │
+  │    ↓    chỉ tương đương 1 tầng FC duy nhất, vô nghĩa)             │
+  │  Dropout(0.1): ngẫu nhiên tắt 10% nơ-ron → chống overfitting     │
+  │    ↓           (buộc mạng không phụ thuộc quá vào 1 nơ-ron nào)   │
+  │  Output: vector 160 chiều                                         │
+  └─────────────────────────────────────────────────────────────────────┘
+BƯỚC 2 — 3 ResBlock nối tiếp (trích xuất đặc trưng sâu):
+  Mỗi ResBlock giữ nguyên kích thước (160→160), cho phép xếp chồng tùy ý.
+  ResBlock chi tiết (ví dụ ResBlock_1):
+  │  Input x: vector 160 chiều                                        │
+  │    │                                                               │
+  │    ├──────────────────────────────────────┐ ← lưu bản gốc x       │
+  │    ↓                                      │   (skip connection)    │
+  │  FC₁(160→160): biến đổi tuyến tính       │                        │
+  │    ↓  (ma trận 160×160 = 25.600 trọng số)│                        │
+  │  BN₁(160): chuẩn hóa                     │                        │
+  │    ↓                                      │                        │
+  │  ReLU: kích hoạt phi tuyến                │                        │
+  │  Dropout(0.1): chống overfitting          │                        │
+  │  FC₂(160→160): biến đổi tuyến tính       │                        │
+  │    ↓  (thêm 25.600 trọng số)             │                        │
+  │  BN₂(160): chuẩn hóa                     │                        │
+  │  ╔═══════════════════════════╗            │                        │
+  │  ║  CỘNG: h + x (element-   ║ ←──────────┘                        │
+  │  ║  wise addition 160 chiều)║                                      │
+  │  ╚═══════════════════════════╝                                     │
+  │  ReLU: kích hoạt phi tuyến lần cuối                                │
+  │  Output: vector 160 chiều (cùng kích thước đầu vào → có thể xếp   │
+  │          chồng thêm ResBlock phía sau)                             │
+  Chuỗi 3 ResBlock:
+    Input(160) → [ResBlock_1](160) → [ResBlock_2](160) → [ResBlock_3](160)
+BƯỚC 3 — Head (đầu ra dự đoán):
+  │  FC(160→1): nén 160 chiều thành 1 số duy nhất = giá trị dự đoán  │
+  │             (bài toán hồi quy, dự đoán một số thực)               │
+TỔNG QUAN LUỒNG DỮ LIỆU (với ví dụ d=160, blocks=3):
+  Input(30) ──→ [Input Block: FC→BN→ReLU→Drop] ──→ (160)
+            ──→ [ResBlock_1: 2×FC + skip] ──→ (160)
+            ──→ [ResBlock_2: 2×FC + skip] ──→ (160)
+            ──→ [ResBlock_3: 2×FC + skip] ──→ (160)
+            ──→ [Head: FC→1] ──→ dự đoán (1 số)
+TỔNG SỐ THAM SỐ ƯỚC TÍNH (d=160, blocks=3):
+  - Input block:  30×160 + 160(bias) + 160×2(BN) = 5.280
+  - Mỗi ResBlock: 160×160×2 + 160×2(bias) + 160×4(BN) = 51.840
+  - Head:         160×1 + 1 = 161
+  - Tổng: 5.280 + 51.840×3 + 161 ≈ 160.961 tham số
+  → Đủ lớn để học pattern phức tạp, đủ nhỏ để huấn luyện nhanh trên CPU.
+SO SÁNH VỚI MLP THƯỜNG (KHÔNG CÓ SKIP CONNECTION)
+┌─────────────────────────┬───────────────────────┬──────────────────────────┐
+│ Tiêu chí                │ MLP thường            │ ResMLP (có skip)         │
+├─────────────────────────┼───────────────────────┼──────────────────────────┤
+│ Độ sâu tối đa thực tế   │ 3-5 tầng (sâu hơn    │ 6-12+ tầng (skip giữ    │
+│                         │ thì gradient biến mất) │ gradient ổn định)        │
+│ Vanishing gradient      │ Nghiêm trọng khi >5   │ Được giải quyết nhờ     │
+│                         │ tầng                   │ đường truyền trực tiếp   │
+│ Dữ liệu bảng (tabular) │ OK với ít tầng        │ Thường tốt nhất hoặc    │
+│                         │                       │ top-2 trong benchmark    │
+│ Rủi ro khi thêm tầng   │ Có thể làm KẾT QUẢ   │ Trường hợp xấu nhất:    │
+│                         │ TỆ HƠN (degradation)  │ block = identity → không │
+│                         │                       │ tệ hơn mạng nông hơn    │
+│ Số tham số (cùng d)     │ Ít hơn (không cần     │ Nhiều hơn ~10-15%       │
+│                         │ block 2 tầng)          │ (thêm FC₂ + BN₂ mỗi    │
+│                         │                       │ block)                   │
+└─────────────────────────┴───────────────────────┴──────────────────────────┘
+CÁCH TỐI ƯU SIÊU THAM SỐ (HYPERPARAMETER TUNING)
+Sử dụng Optuna (thư viện tối ưu Bayesian) để tự động tìm tổ hợp tốt nhất:
+  1. res_d (chiều tầng ẩn): 96 → 224, bước 16
+     - Quá nhỏ: mạng không đủ "dung lượng" để nhớ pattern phức tạp
+     - Quá lớn: overfitting + chậm
+  2. res_blocks (số ResBlock): 2 → 4
+     - Ít block: mạng nông, có thể underfit (không học đủ sâu)
+     - Nhiều block: mạng sâu, có thể overfitting trên tập nhỏ
+  3. dropout: 0.05 → 0.25
+     - Thấp: ít regularization, dễ overfitting
+     - Cao: mất quá nhiều thông tin, khó hội tụ
+  4. lr (learning rate - tốc độ học): 3e-4 → 3e-3
+     - Thấp: hội tụ chậm, có thể mắc kẹt ở cực tiểu cục bộ
+     - Cao: dao động, không hội tụ
+  5. wd (weight decay - suy giảm trọng số): 1e-6 → 3e-4
+     - Phạt trọng số lớn → giúp mô hình tổng quát hóa tốt hơn
+ƯU ĐIỂM
+  1. Huấn luyện ổn định: skip connection giúp gradient luôn "chảy" được
+  2. Không bao giờ tệ hơn mạng nông: trường hợp xấu nhất, block = identity
+  3. Dễ mở rộng: thêm block không gây degradation
+  4. Hiệu quả trên dữ liệu bảng: thường top-1 hoặc top-2 so với XGBoost
+  5. Kiến trúc đơn giản: không cần attention hay cơ chế phức tạp
+NHƯỢC ĐIỂM
+  1. Nhiều tham số hơn MLP thường ~10-15% (do mỗi block có 2 tầng FC)
+  2. Cần BatchNorm → kích thước batch nhỏ có thể gây bất ổn (BN ước lượng
+     trung bình/phương sai từ batch, batch nhỏ → ước lượng kém)
+  3. Chậm hơn MLP nông trên dữ liệu đơn giản (overkill cho bài toán dễ)
+  4. Vẫn cần tuning siêu tham số cẩn thận (d, blocks, dropout, lr, wd)
+Chạy độc lập:  python buoc_04_resmlp.py
+# Kiến trúc mạng — Định nghĩa các lớp (class) PyTorch
+    """Một khối residual (residual block) — đơn vị xây dựng cơ bản của ResMLP.
+    Mỗi ResBlock thực hiện biến đổi 2 tầng rồi cộng kết quả với đầu vào gốc
+    (skip connection). Đây là cơ chế cốt lõi giúp ResMLP vượt trội so với
+    MLP thông thường.
+    Luồng dữ liệu chi tiết (forward pass):
+    ───────────────────────────────────────
+    Đầu vào x (vector d chiều)
+      │
+      ├──── lưu bản sao x ──────────────────────────────────┐
+      ↓                                                      │
+    FC₁(d→d): phép biến đổi tuyến tính = W₁·x + b₁          │
+      ↓       (học cách tổ hợp lại các đặc trưng)            │
+    BN₁(d): chuẩn hóa batch → ổn định phân phối giá trị     │
+    ReLU: max(0, val) → tạo tính phi tuyến                   │
+      ↓   (không có phi tuyến, 2 tầng FC = 1 tầng FC)        │
+    Dropout(p): tắt ngẫu nhiên p% nơ-ron → chống overfitting │
+    FC₂(d→d): biến đổi tuyến tính lần 2 = W₂·h + b₂         │
+      ↓       (tinh chỉnh thêm các đặc trưng)                │
+    BN₂(d): chuẩn hóa lần nữa trước khi cộng                │
+    ╔══════════════════════════════════════╗                  │
+    ║  CỘNG element-wise: h + x            ║ ←───────────────┘
+    ║  (cộng từng phần tử tương ứng)       ║
+    ╚══════════════════════════════════════╝
+      ↓
+    ReLU: kích hoạt phi tuyến lần cuối
+    Đầu ra (vector d chiều, cùng kích thước đầu vào)
+    Tại sao có 2 tầng FC mà không phải 1?
+    - 1 tầng FC + skip = phép biến đổi tuyến tính cộng với input = vẫn gần
+      tuyến tính, khả năng biểu diễn hạn chế.
+    - 2 tầng FC + ReLU ở giữa = phép biến đổi PHI TUYẾN phức tạp hơn, có
+      thể xấp xỉ nhiều hàm số hơn (theo Universal Approximation Theorem).
+    ─────────────────
+        d       (int):   Số chiều của vector đầu vào VÀ đầu ra. Phải bằng
+                         nhau để phép cộng skip connection hợp lệ (cộng 2
+                         vector cùng kích thước). Thường 96-224.
+        dropout (float): Tỷ lệ nơ-ron bị tắt ngẫu nhiên mỗi lần forward,
+                         ví dụ 0.1 = tắt 10%. Chỉ hoạt động khi train,
+                         khi đánh giá (eval) thì tất cả nơ-ron đều bật.
+        # --- Tầng 1: biến đổi tuyến tính đầu tiên ---
+        # FC₁ nhận vector d chiều, xuất vector d chiều.
+        # Ma trận trọng số W₁ có kích thước d×d, tức d² tham số cần học.
+        # Ví dụ d=160: 160×160 = 25.600 tham số chỉ riêng tầng này.
+        # BatchNorm chuẩn hóa output của FC₁ về trung bình ≈ 0, độ lệch
+        # chuẩn ≈ 1 TRONG MỖI BATCH. Lý do: nếu giá trị quá lớn/nhỏ,
+        # ReLU sẽ bão hòa (toàn 0 hoặc toàn dương lớn) → học kém.
+        # BN cũng có tác dụng regularization nhẹ vì mỗi batch có thống kê
+        # khác nhau → thêm nhiễu → giảm overfitting.
+        # Hàm kích hoạt đơn giản nhất và phổ biến nhất. Lý do chọn ReLU:
+        # - Tính toán cực nhanh (chỉ so sánh với 0)
+        # - Gradient = 1 khi x > 0 → không bị vanishing gradient ở nửa dương
+        # - Đủ tốt cho dữ liệu bảng (không cần hàm phức tạp hơn như GELU)
+        # Dropout: mỗi lần forward, ngẫu nhiên chọn p% nơ-ron và đặt = 0.
+        # Tại sao? Buộc mạng KHÔNG phụ thuộc vào bất kỳ nơ-ron đơn lẻ nào.
+        # Giống như dạy một nhóm sinh viên: nếu mỗi buổi học bạn ngẫu nhiên
+        # vắng 10% sinh viên, tất cả đều phải tự biết làm thay → nhóm mạnh
+        # hơn so với nhóm mà chỉ 1-2 người giỏi "gánh team".
+        # --- Tầng 2: biến đổi tuyến tính thứ hai ---
+        # Tầng này tinh chỉnh thêm kết quả sau khi ReLU đã tạo phi tuyến.
+        # Output sẽ được cộng trực tiếp với input gốc (skip connection),
+        # nên kích thước phải giữ nguyên d→d.
+        # BN₂ chuẩn hóa lần nữa TRƯỚC khi cộng với x gốc.
+        # Lý do: nếu output FC₂ có giá trị rất lớn so với x, phép cộng
+        # sẽ bị "lấn át" bởi 1 bên → mất ý nghĩa skip connection.
+        # BN₂ giữ giá trị ở cùng "quy mô" (scale) với x → phép cộng
+        # cân bằng hơn.
+        # --- Nhánh biến đổi: x đi qua 2 tầng FC để tạo "phần dư" h ---
+        # Tầng 1: FC₁ → BN₁ → ReLU → Dropout
+        # Thứ tự này (Linear→BN→Activation→Dropout) là quy ước phổ biến
+        # trong deep learning, gọi là "pre-activation" pattern.
+        # Tầng 2: FC₂ → BN₂ (KHÔNG có ReLU ở đây, vì ReLU sẽ áp dụng
+        # SAU phép cộng skip connection — nếu ReLU ở đây + ReLU ở sau
+        # = 2 lần ReLU liên tiếp, vô ích vì ReLU(ReLU(x)) = ReLU(x))
+        # --- Skip connection: cộng đầu vào gốc x với phần dư h ---
+        # Đây là dòng code quan trọng nhất trong toàn bộ file!
+        # x + h: cộng element-wise, bắt buộc x và h cùng kích thước (d chiều).
+        # ReLU cuối cùng kích hoạt tổng. Kết quả có cùng kích thước d
+        # → có thể tiếp tục đưa vào ResBlock tiếp theo.
+    """Residual MLP — mô hình deep learning chính cho dữ liệu dạng bảng.
+    Mô hình ghép nối 3 phần: Input Block → N ResBlock → Head, tạo thành
+    một "đường ống" xử lý dữ liệu từ thô đến dự đoán cuối cùng.
+    Luồng dữ liệu tổng thể (forward pass):
+    ────────────────────────────────────────
+    Đầu vào: vector in_dim chiều (mỗi chiều = 1 đặc trưng của dữ liệu)
+    [Input Block] FC(in_dim→d) → BN → ReLU → Dropout
+      ↓  Mục đích: "nâng" kích thước từ in_dim lên d để tương thích
+      ↓  với các ResBlock phía sau (ResBlock yêu cầu input d chiều)
+    [ResBlock_1] 2×FC + skip connection (d→d)
+    [ResBlock_2] 2×FC + skip connection (d→d)
+    ... (tổng cộng N ResBlock)
+    [ResBlock_N] 2×FC + skip connection (d→d)
+    [Head] FC(d→1): nén thành 1 số = giá trị dự đoán (hồi quy)
+    Đầu ra: 1 số thực (scalar) cho mỗi mẫu dữ liệu trong batch
+        in_dim  (int):   Số đặc trưng đầu vào. Ví dụ: dữ liệu có 30 cột
+                         đặc trưng → in_dim = 30. Con số này phụ thuộc vào
+                         bước tiền xử lý dữ liệu, KHÔNG phải siêu tham số
+                         cần tuning.
+        d       (int):   Chiều (width) của tất cả tầng ẩn bên trong mô hình.
+                         Càng lớn = mạng càng "rộng" = nhiều tham số hơn =
+                         có thể học pattern phức tạp hơn, nhưng cũng dễ
+                         overfitting và chậm hơn. Phạm vi tìm kiếm: 96-224.
+        blocks  (int):   Số ResBlock xếp chồng. Càng nhiều = mạng càng "sâu"
+                         = có thể học biểu diễn trừu tượng hơn. Nhờ skip
+                         connection, thêm block không gây hại. Phạm vi: 2-4.
+        dropout (float): Tỷ lệ nơ-ron bị tắt ngẫu nhiên, ví dụ 0.1 = 10%.
+                         Giá trị lớn hơn = regularization mạnh hơn = ít
+                         overfitting nhưng khó hội tụ. Phạm vi: 0.05-0.25.
+        # --- Input Block: chuyển đổi kích thước từ in_dim sang d ---
+        # Tại sao cần block này? Vì in_dim (số đặc trưng gốc, ví dụ 30)
+        # thường khác d (chiều tầng ẩn, ví dụ 160). ResBlock yêu cầu
+        # input và output cùng kích thước d (để cộng skip connection).
+        # Nên cần FC(in_dim→d) để "nâng chiều" trước khi vào ResBlock.
+        # BN + ReLU + Dropout giúp ổn định và regularize ngay từ đầu.
+        # --- N ResBlock xếp chồng: trích xuất đặc trưng ngày càng trừu tượng ---
+        # nn.Sequential xếp các block nối tiếp: output block 1 → input block 2.
+        # Mỗi block giữ nguyên kích thước d → có thể xếp bao nhiêu tùy ý.
+        # Số block (2-4) được Optuna tối ưu: quá ít → underfit, quá nhiều →
+        # overfitting trên tập dữ liệu nhỏ (vì thêm tham số nhưng không thêm
+        # thông tin mới từ dữ liệu).
+        # --- Head: tầng dự đoán cuối cùng ---
+        # Nén từ d chiều xuống 1 số duy nhất. Đây là bài toán hồi quy
+        # (regression), nên KHÔNG có hàm kích hoạt sau FC — đầu ra là
+        # số thực bất kỳ (có thể âm, dương, hoặc 0).
+        # Nếu là bài phân loại, ta sẽ thêm Sigmoid (2 lớp) hoặc
+        # Softmax (nhiều lớp) ở đây, nhưng ở đây ta không cần.
+        # Luồng forward rất gọn nhờ nn.Sequential:
+        # 1. self.inp(x): Input Block biến x từ in_dim chiều → d chiều
+        # 2. self.blocks(...): Chuỗi N ResBlock, mỗi block d→d với skip
+        # 3. self.head(...): FC(d→1) cho ra 1 số dự đoán
+        # Toàn bộ quá trình diễn ra tự động khi gọi model(x) nhờ PyTorch.
+# Không gian tìm kiếm siêu tham số (Hyperparameter Search Space)
+# Optuna sẽ thử NHIỀU tổ hợp khác nhau của các siêu tham số dưới đây,
+# đánh giá mỗi tổ hợp trên tập validation, và dần dần tập trung vào
+# vùng cho kết quả tốt (thuật toán TPE — Tree-structured Parzen Estimator).
+        # ── lr (learning rate - tốc độ học) ──
+        # Quyết định bước nhảy mỗi lần cập nhật trọng số.
+        # log=True: tìm kiếm trên thang logarit (3e-4, 6e-4, 1e-3, 2e-3, 3e-3)
+        # vì learning rate thường phân bố trên thang log — sự khác biệt giữa
+        # 1e-4 và 2e-4 quan trọng hơn nhiều so với giữa 2e-3 và 2.001e-3.
+        # Quá nhỏ (3e-4): hội tụ rất chậm, có thể cần hàng nghìn epoch.
+        # Quá lớn (3e-3): trọng số "nhảy" quá xa → loss dao động, không hội tụ.
+        # ── wd (weight decay - suy giảm trọng số) ──
+        # Một dạng regularization: mỗi bước cập nhật, trọng số bị nhân với
+        # (1 - wd), kéo chúng về gần 0. Tác dụng: ngăn trọng số quá lớn →
+        # mô hình tổng quát hóa tốt hơn trên dữ liệu mới (giảm overfitting).
+        # log=True: vì wd cũng phân bố trên thang log.
+        # Quá nhỏ (1e-6): gần như không có regularization.
+        # Quá lớn (3e-4): trọng số bị ép quá gần 0, mạng mất khả năng học.
+        # ── dropout (tỷ lệ tắt nơ-ron ngẫu nhiên) ──
+        # Phạm vi 0.05-0.25 phù hợp với dữ liệu bảng (tabular).
+        # Dữ liệu bảng thường có ít mẫu hơn ảnh → overfitting dễ xảy ra →
+        # cần dropout, nhưng cũng không cần quá cao vì mất thông tin.
+        # 0.05: chỉ tắt 5% → regularization nhẹ → phù hợp tập lớn.
+        # 0.25: tắt 25% → regularization mạnh → phù hợp tập nhỏ, dễ overfit.
+        # ── res_d (chiều tầng ẩn - hidden dimension) ──
+        # Quyết định "chiều rộng" (width) của mạng. Tất cả tầng ẩn và
+        # ResBlock đều dùng chung kích thước này.
+        # step=16: chỉ thử 96, 112, 128, 144, 160, 176, 192, 208, 224
+        #          (9 giá trị). Bội của 16 tận dụng tối ưu phần cứng GPU
+        #          (Tensor Core hoạt động hiệu quả nhất với kích thước bội 16).
+        # 96:  mạng hẹp, ít tham số (~50K), nhanh nhưng có thể underfit.
+        # 224: mạng rộng, nhiều tham số (~300K), mạnh nhưng chậm và dễ overfit.
+        # ── res_blocks (số ResBlock xếp chồng) ──
+        # Quyết định "chiều sâu" (depth) của mạng.
+        # 2: mạng nông → 4 tầng FC (2 block × 2 tầng) + input block + head
+        #    = tổng cộng 6 tầng biến đổi. Phù hợp dữ liệu đơn giản.
+        # 4: mạng sâu → 8 tầng FC + input + head = 10 tầng biến đổi.
+        #    Cần nhiều dữ liệu hơn để train hiệu quả.
+        # Nhờ skip connection, 4 block KHÔNG tệ hơn 2 block (worst case:
+        # 2 block thừa sẽ trở thành identity → mạng 4 block ≈ mạng 2 block).
+    """Tạo một instance ResMLP từ dictionary siêu tham số.
+    Hàm này là "cầu nối" giữa Optuna (trả về dict tham số) và ResMLP
+    (nhận các tham số riêng lẻ). Cần ép kiểu int/float vì Optuna có thể
+    trả về numpy type không tương thích trực tiếp với PyTorch.
+        in_dim (int):          Số đặc trưng đầu vào (từ dữ liệu).
+        params (dict):         Dictionary chứa siêu tham số từ Optuna:
+                               - "res_d": chiều tầng ẩn
+                               - "res_blocks": số ResBlock
+                               - "dropout": tỷ lệ dropout
+        nn.Module: Instance ResMLP đã khởi tạo, sẵn sàng huấn luyện.
+# Chạy benchmark — Huấn luyện và đánh giá mô hình
+    print(f"[{MODEL_NAME}] BUOC 4/4: Kiem tra Leakage (group split vs random split)")
+    print("Muc dich: so sanh Test_R2 khi chia du lieu DUNG (theo nhom GID) voi khi")
+    print("chia SAI (ngau nhien theo dong) de do 'leakage premium'. Neu R2 cua random")
+    print("split cao hon han group split, ngu y co ro ri du lieu giua train/test.")
+        print(f"\n  Group split (dung):   Test_R2 = {r2_g:.4f}")
+        print(f"  Random split (sai):   Test_R2 = {r2_r:.4f}")
+            print("  -> CO LEAKAGE dang ke! Random split thoi phong ket qua.")
+            print("  -> Leakage nhe. Nen dung group split de an toan.")
+            print("  -> Khong co leakage ro rang.")
+        print("Khong du du lieu de so sanh leakage (thieu aggregate.csv).")
+    print(f"\nDa chay xong toan bo pipeline cho {MODEL_NAME} (holdout + k-fold + leakage check).")

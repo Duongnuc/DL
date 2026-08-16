@@ -1,0 +1,338 @@
+"""Merged file - 03_resmlp.py
+original: buoc_04_resmlp.py, buoc_11_leakage_resmlp.py (leakage check), plus the shared pipeline common_tabular.py,
+  2. Define the model architecture + Optuna hyperparameter search space - from buoc_04_resmlp.py.
+written to the hidden _cache/resmlp/ directory so downstream summary files (12, 13) can
+Run: python 03_resmlp.py
+    te = regression_metrics(y_test_raw, pred_test_raw)
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+# PART 3/4 - MODEL ARCHITECTURE + SEARCH SPACE (merged from buoc_04_resmlp.py)
+ResMLP model — Residual Multi-Layer Perceptron (multi-layer perceptron with skip connections).
+FULL NAME AND MEANING
+  - MLP (Multi-Layer Perceptron): a multi-layer neural network, each layer is a
+    linear transform (matrix multiply + add bias) followed by a nonlinear
+    activation function. This is the most fundamental architecture in deep learning.
+  - Residual: the "skip connection" technique that lets
+    data bypass some layers unchanged, then adds back
+    to the transformed result. This technique was first proposed in ResNet
+    (He et al., 2015) and revolutionized the training of deep networks.
+WHAT IS A SKIP CONNECTION? — EXPLAINED FOR BEGINNERS
+Imagine passing a message through 10 people in a row (like the
+"telephone game"). Through each person, the message can get slightly distorted.
+After 10 people, the original message may be completely wrong.
+A skip connection is like having person 1 send the message DIRECTLY to
+person 3, 5, 7... That way, even though the message passes through many people, the
+original is always preserved and can be cross-checked.
+In a neural network:
+  - The "message" = the data signal (during the forward pass)
+    or the gradient signal (during the backward pass).
+  - Without a skip connection: the gradient must pass through EACH layer, each layer
+    multiplies the gradient by a number less than 1 → after many layers, gradient → 0
+    (the "vanishing gradient" phenomenon = gradient disappears). When gradient ≈ 0,
+    the earliest layers learn nothing since they receive no feedback.
+  - With a skip connection: the gradient has a "highway" straight back to the first layer,
+    not multiplied down progressively → deep networks still train effectively.
+The mathematical formula of a ResBlock:
+  where:
+    x   = the block's input (kept unchanged, not transformed)
+    F(x)= the transform through 2 FC + BN layers (the "residual" part)
+    x + F(x) = direct vector addition (element-wise addition)
+  If F(x) ≈ 0 (the block learns nothing useful), then output ≈ ReLU(x),
+  meaning the data still passes through intact. This is why a skip
+  connection "never hurts" — in the worst case, the block
+  simply becomes the identity function.
+DETAILED ARCHITECTURE — DIAGRAM WITH A CONCRETE NUMERIC EXAMPLE
+Assume: input_dim=30 (30 input features), d=160, blocks=3, dropout=0.1
+STEP 1 — Input Block (dimension conversion):
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  Input: 30-dimensional vector (30 features of 1 data sample)         │
+  │    ↓                                                               │
+  │  FC(30→160): matrix multiply 30×160, 30-dim vector → 160-dim     │
+  │    ↓         (the matrix has 30×160 = 4,800 weights to learn)         │
+  │  BatchNorm(160): normalize 160 values to mean≈0, std≈1    │
+  │    ↓             (helps training stability, avoids values that are too large) │
+  │  ReLU: max(0, x) — negative becomes 0, positive is kept unchanged  │
+  │    ↓   (introduces nonlinearity — without it, many FC layers in a row │
+  │    ↓    are equivalent to just 1 single FC layer, meaningless)             │
+  │  Dropout(0.1): randomly disable 10% of neurons → reduces overfitting     │
+  │    ↓           (forces the network to not depend too much on any 1 neuron)   │
+  │  Output: 160-dimensional vector                                         │
+  └─────────────────────────────────────────────────────────────────────┘
+STEP 2 — 3 ResBlocks in sequence (deep feature extraction):
+  Each ResBlock keeps the same dimension (160→160), allowing arbitrary stacking.
+  ResBlock detail (example ResBlock_1):
+  │  Input x: 160-dimensional vector                                        │
+  │    │                                                               │
+  │    ├──────────────────────────────────────┐ ← save the original x       │
+  │    ↓                                      │   (skip connection)    │
+  │  FC₁(160→160): linear transform       │                        │
+  │    ↓  (160×160 = 25,600-weight matrix)│                        │
+  │  BN₁(160): normalize                     │                        │
+  │    ↓                                      │                        │
+  │  ReLU: nonlinear activation                │                        │
+  │  Dropout(0.1): reduce overfitting          │                        │
+  │  FC₂(160→160): linear transform       │                        │
+  │    ↓  (adds 25,600 weights)             │                        │
+  │  BN₂(160): normalize                     │                        │
+  │  ╔═══════════════════════════╗            │                        │
+  │  ║  ADD: h + x (element-   ║ ←──────────┘                        │
+  │  ║  wise addition, 160-dim)║                                      │
+  │  ╚═══════════════════════════╝                                     │
+  │  ReLU: final nonlinear activation                                │
+  │  Output: 160-dimensional vector (same size as input → can be stacked   │
+  │          with another ResBlock afterward)                             │
+  Chain of 3 ResBlocks:
+    Input(160) → [ResBlock_1](160) → [ResBlock_2](160) → [ResBlock_3](160)
+STEP 3 — Head (prediction output):
+  │  FC(160→1): compress 160 dims into 1 single number = the predicted value  │
+  │             (a regression task, predicting one real number)               │
+OVERALL DATA FLOW (with example d=160, blocks=3):
+  Input(30) ──→ [Input Block: FC→BN→ReLU→Drop] ──→ (160)
+            ──→ [ResBlock_1: 2×FC + skip] ──→ (160)
+            ──→ [ResBlock_2: 2×FC + skip] ──→ (160)
+            ──→ [ResBlock_3: 2×FC + skip] ──→ (160)
+            ──→ [Head: FC→1] ──→ prediction (1 number)
+ESTIMATED TOTAL PARAMETER COUNT (d=160, blocks=3):
+  - Input block:  30×160 + 160(bias) + 160×2(BN) = 5,280
+  - Each ResBlock: 160×160×2 + 160×2(bias) + 160×4(BN) = 51,840
+  - Head:         160×1 + 1 = 161
+  - Total: 5,280 + 51,840×3 + 161 ≈ 160,961 parameters
+  → Large enough to learn complex patterns, small enough to train quickly on CPU.
+COMPARISON WITH A PLAIN MLP (NO SKIP CONNECTION)
+┌─────────────────────────┬───────────────────────┬──────────────────────────┐
+│ Criterion                │ Plain MLP             │ ResMLP (with skip)         │
+├─────────────────────────┼───────────────────────┼──────────────────────────┤
+│ Practical max depth   │ 3-5 layers (deeper    │ 6-12+ layers (skip keeps    │
+│                         │ makes gradient vanish) │ gradient stable)        │
+│ Vanishing gradient      │ Severe when >5   │ Solved thanks to     │
+│                         │ layers                   │ the direct path   │
+│ Tabular data │ OK with few layers        │ Usually best or    │
+│                         │                       │ top-2 in benchmarks    │
+│ Risk when adding layers   │ Can make RESULTS WORSE    │ Worst case:    │
+│                         │ (degradation)  │ block = identity → not │
+│                         │                       │ worse than a shallower network    │
+│ Param count (same d)     │ Fewer (no need for     │ More by ~10-15%       │
+│                         │ 2-layer block)          │ (extra FC₂ + BN₂ per    │
+│                         │                       │ block)                   │
+└─────────────────────────┴───────────────────────┴──────────────────────────┘
+HYPERPARAMETER TUNING METHOD
+Uses Optuna (a Bayesian optimization library) to automatically find the best combination:
+  1. res_d (hidden layer dimension): 96 → 224, step 16
+     - Too small: the network lacks enough "capacity" to remember complex patterns
+     - Too large: overfitting + slow
+  2. res_blocks (number of ResBlocks): 2 → 4
+     - Few blocks: shallow network, may underfit (doesn't learn deep enough)
+     - Many blocks: deep network, may overfit on small datasets
+  3. dropout: 0.05 → 0.25
+     - Low: little regularization, prone to overfitting
+     - High: loses too much information, hard to converge
+  4. lr (learning rate): 3e-4 → 3e-3
+     - Low: converges slowly, may get stuck in local minima
+     - High: oscillates, doesn't converge
+  5. wd (weight decay): 1e-6 → 3e-4
+     - Penalizes large weights → helps the model generalize better
+ADVANTAGES
+  1. Stable training: skip connections keep the gradient "flowing"
+  2. Never worse than a shallow network: worst case, block = identity
+  3. Easy to extend: adding blocks doesn't cause degradation
+  4. Effective on tabular data: usually top-1 or top-2 compared to XGBoost
+  5. Simple architecture: no need for attention or complex mechanisms
+DISADVANTAGES
+  1. More parameters than a plain MLP by ~10-15% (each block has 2 FC layers)
+  2. Requires BatchNorm → small batch sizes can cause instability (BN estimates
+     mean/variance from the batch, small batch → poor estimate)
+  3. Slower than a shallow MLP on simple data (overkill for easy problems)
+  4. Still requires careful hyperparameter tuning (d, blocks, dropout, lr, wd)
+Run standalone:  python buoc_04_resmlp.py
+# Network architecture — Defines the PyTorch classes
+    """A residual block — the basic building unit of ResMLP.
+    Each ResBlock performs a 2-layer transform then adds the result to the original input
+    (skip connection). This is the core mechanism that lets ResMLP outperform
+    plain MLP.
+    Detailed data flow (forward pass):
+    ───────────────────────────────────────
+    Input x (d-dimensional vector)
+      │
+      ├──── save a copy of x ──────────────────────────────────┐
+      ↓                                                      │
+    FC₁(d→d): linear transform = W₁·x + b₁          │
+      ↓       (learns to recombine features)            │
+    BN₁(d): batch normalize → stabilizes the value distribution     │
+    ReLU: max(0, val) → introduces nonlinearity                   │
+      ↓   (without nonlinearity, 2 FC layers = 1 FC layer)        │
+    Dropout(p): randomly disable p% of neurons → reduce overfitting │
+    FC₂(d→d): second linear transform = W₂·h + b₂         │
+      ↓       (further refine the features)                │
+    BN₂(d): normalize again before adding                │
+    ╔══════════════════════════════════════╗                  │
+    ║  ADD element-wise: h + x            ║ ←───────────────┘
+    ║  (add corresponding elements)       ║
+    ╚══════════════════════════════════════╝
+      ↓
+    ReLU: final nonlinear activation
+    Output (d-dimensional vector, same size as input)
+    Why 2 FC layers instead of 1?
+    - 1 FC layer + skip = a linear transform added to the input = still nearly
+      linear, limited representational power.
+    - 2 FC layers + ReLU in between = a more complex NONLINEAR transform, can
+      approximate more functions (per the Universal Approximation Theorem).
+    ─────────────────
+        d       (int):   Dimension of the input AND output vector. Must be
+                         equal for the skip-connection addition to be valid (adding 2
+                         vectors of the same size). Usually 96-224.
+        dropout (float): Fraction of neurons randomly disabled on each forward pass,
+                         e.g. 0.1 = disable 10%. Only active during training,
+                         during eval all neurons are on.
+        # --- Layer 1: first linear transform ---
+        # FC₁ takes a d-dimensional vector, outputs a d-dimensional vector.
+        # Weight matrix W₁ has size d×d, i.e. d² parameters to learn.
+        # Example d=160: 160×160 = 25,600 parameters just for this layer.
+        # BatchNorm normalizes FC₁'s output to mean ≈ 0, standard
+        # deviation ≈ 1 WITHIN EACH BATCH. Reason: if values are too large/small,
+        # ReLU will saturate (all 0 or all large positive) → poor learning.
+        # BN also has a mild regularization effect since each batch has different
+        # statistics → adds noise → reduces overfitting.
+        # The simplest and most common activation function. Why choose ReLU:
+        # - Extremely fast to compute (just a comparison to 0)
+        # - Gradient = 1 when x > 0 → no vanishing gradient on the positive half
+        # - Good enough for tabular data (no need for a more complex function like GELU)
+        # Dropout: on each forward pass, randomly pick p% of neurons and set them = 0.
+        # Why? Forces the network to NOT depend on any single neuron.
+        # Like teaching a group of students: if each session you randomly make
+        # 10% of students absent, everyone must learn to cover for each other → the group is stronger
+        # than a group where only 1-2 skilled people "carry the team".
+        # --- Layer 2: second linear transform ---
+        # This layer further refines the result after ReLU introduced nonlinearity.
+        # The output will be added directly to the original input (skip connection),
+        # so the size must stay d→d.
+        # BN₂ normalizes again BEFORE adding to the original x.
+        # Reason: if FC₂'s output has a value much larger than x, the addition
+        # would be "dominated" by one side → losing the meaning of the skip connection.
+        # BN₂ keeps the value at the same "scale" as x → the addition is
+        # more balanced.
+        # --- Transform branch: x passes through 2 FC layers to produce the "residual" h ---
+        # Layer 1: FC₁ → BN₁ → ReLU → Dropout
+        # This order (Linear→BN→Activation→Dropout) is a common convention
+        # in deep learning, called the "pre-activation" pattern.
+        # Layer 2: FC₂ → BN₂ (NO ReLU here, since ReLU is applied
+        # AFTER the skip-connection addition — if ReLU were here + ReLU after
+        # = 2 consecutive ReLUs, pointless since ReLU(ReLU(x)) = ReLU(x))
+        # --- Skip connection: add the original input x to the residual h ---
+        # This is the single most important line of code in the whole file!
+        # x + h: element-wise addition, requires x and h to have the same size (d-dim).
+        # The final ReLU activates the sum. The result has the same size d
+        # → can be fed into the next ResBlock.
+    """Residual MLP — the main deep learning model for tabular data.
+    The model chains 3 parts: Input Block → N ResBlocks → Head, forming
+    a "pipeline" processing data from raw input to the final prediction.
+    Overall data flow (forward pass):
+    ────────────────────────────────────────
+    Input: in_dim-dimensional vector (each dimension = 1 data feature)
+    [Input Block] FC(in_dim→d) → BN → ReLU → Dropout
+      ↓  Purpose: "lift" the dimension from in_dim to d to be compatible
+      ↓  with the ResBlocks that follow (ResBlock requires a d-dimensional input)
+    [ResBlock_1] 2×FC + skip connection (d→d)
+    [ResBlock_2] 2×FC + skip connection (d→d)
+    ... (N ResBlocks total)
+    [ResBlock_N] 2×FC + skip connection (d→d)
+    [Head] FC(d→1): compress into 1 number = predicted value (regression)
+    Output: 1 real number (scalar) per data sample in the batch
+        in_dim  (int):   Number of input features. Example: data with 30
+                         feature columns → in_dim = 30. This number depends on
+                         the data preprocessing step, it is NOT a hyperparameter
+                         to tune.
+        d       (int):   Dimension (width) of all hidden layers in the model.
+                         Larger = "wider" network = more parameters =
+                         can learn more complex patterns, but also more prone to
+                         overfitting and slower. Search range: 96-224.
+        blocks  (int):   Number of stacked ResBlocks. More = "deeper" network
+                         = can learn more abstract representations. Thanks to skip
+                         connections, adding blocks doesn't hurt. Range: 2-4.
+        dropout (float): Fraction of neurons randomly disabled, e.g. 0.1 = 10%.
+                         Larger value = stronger regularization = less
+                         overfitting but harder to converge. Range: 0.05-0.25.
+        # --- Input Block: convert dimension from in_dim to d ---
+        # Why is this block needed? Because in_dim (original feature count, e.g. 30)
+        # is usually different from d (hidden layer dimension, e.g. 160). ResBlock requires
+        # input and output to have the same size d (so the skip-connection addition works).
+        # So FC(in_dim→d) is needed to "lift the dimension" before entering ResBlock.
+        # BN + ReLU + Dropout help stabilize and regularize from the very start.
+        # --- N stacked ResBlocks: extract progressively more abstract features ---
+        # nn.Sequential chains the blocks in sequence: output of block 1 → input of block 2.
+        # Each block keeps the same size d → any number can be stacked.
+        # The number of blocks (2-4) is optimized by Optuna: too few → underfit, too many →
+        # overfitting on small datasets (since it adds parameters without adding
+        # new information from the data).
+        # --- Head: the final prediction layer ---
+        # Compresses from d dimensions down to a single number. This is a regression
+        # task, so there is NO activation function after FC — the output is
+        # any real number (can be negative, positive, or 0).
+        # If it were a classification task, we would add Sigmoid (2 classes) or
+        # Softmax (multi-class) here, but it's not needed here.
+        # The forward flow is very compact thanks to nn.Sequential:
+        # 1. self.inp(x): Input Block transforms x from in_dim dims → d dims
+        # 2. self.blocks(...): Chain of N ResBlocks, each d→d with skip
+        # 3. self.head(...): FC(d→1) produces 1 predicted number
+        # The whole process happens automatically when calling model(x) via PyTorch.
+# Hyperparameter Search Space
+# Optuna will try MANY different combinations of the hyperparameters below,
+# evaluate each combination on the validation set, and gradually focus on
+# the region that gives good results (TPE algorithm — Tree-structured Parzen Estimator).
+        # ── lr (learning rate) ──
+        # Determines the step size on each weight update.
+        # log=True: search on a logarithmic scale (3e-4, 6e-4, 1e-3, 2e-3, 3e-3)
+        # since learning rate is usually distributed on a log scale — the difference between
+        # 1e-4 and 2e-4 matters much more than between 2e-3 and 2.001e-3.
+        # Too small (3e-4): converges very slowly, may need thousands of epochs.
+        # Too large (3e-3): weights "jump" too far → loss oscillates, doesn't converge.
+        # ── wd (weight decay) ──
+        # A form of regularization: on each update step, weights are multiplied by
+        # (1 - wd), pulling them toward 0. Effect: prevents weights from growing too large →
+        # the model generalizes better on new data (reduces overfitting).
+        # log=True: since wd is also distributed on a log scale.
+        # Too small (1e-6): almost no regularization.
+        # Too large (3e-4): weights are forced too close to 0, the network loses learning ability.
+        # ── dropout (random neuron-disable rate) ──
+        # Range 0.05-0.25 suits tabular data.
+        # Tabular data usually has fewer samples than images → overfitting happens easily →
+        # dropout is needed, but not too high since information is lost.
+        # 0.05: only disables 5% → light regularization → suited to large datasets.
+        # 0.25: disables 25% → strong regularization → suited to small, overfit-prone datasets.
+        # ── res_d (hidden layer dimension) ──
+        # Determines the network's "width". All hidden layers and
+        # ResBlocks use this same size.
+        # step=16: only tries 96, 112, 128, 144, 160, 176, 192, 208, 224
+        #          (9 values). Multiples of 16 make optimal use of GPU hardware
+        #          (Tensor Cores work most efficiently with sizes that are multiples of 16).
+        # 96:  narrow network, few parameters (~50K), fast but may underfit.
+        # 224: wide network, many parameters (~300K), powerful but slower and prone to overfitting.
+        # ── res_blocks (number of stacked ResBlocks) ──
+        # Determines the network's "depth".
+        # 2: shallow network → 4 FC layers (2 blocks × 2 layers) + input block + head
+        #    = 6 transform layers total. Suited to simple data.
+        # 4: deep network → 8 FC layers + input + head = 10 transform layers.
+        #    Needs more data to train effectively.
+        # Thanks to skip connections, 4 blocks are NOT worse than 2 blocks (worst case:
+        # 2 extra blocks become identity → a 4-block network ≈ a 2-block network).
+    """Create a ResMLP instance from the hyperparameter dictionary.
+    This function is the "bridge" between Optuna (returns a param dict) and ResMLP
+    (takes individual parameters). Needs int/float casting since Optuna may
+    return a numpy type that isn't directly compatible with PyTorch.
+        in_dim (int):          Number of input features (from the data).
+        params (dict):         Dictionary containing hyperparameters from Optuna:
+                               - "res_d": hidden layer dimension
+                               - "res_blocks": number of ResBlocks
+                               - "dropout": dropout rate
+        nn.Module: Initialized ResMLP instance, ready to train.
+# Run benchmark — Train and evaluate the model
+    print(f"[{MODEL_NAME}] STEP 4/4: Leakage check (group split vs random split)")
+    print("Purpose: compare Test_R2 when splitting data CORRECTLY (by GID group) vs when")
+    print("splitting INCORRECTLY (randomly by row) to measure the 'leakage premium'. If random")
+    print("split's R2 is much higher than group split, it suggests data leakage between train/test.")
+        print(f"\n  Group split (correct):   Test_R2 = {r2_g:.4f}")
+        print(f"  Random split (incorrect):   Test_R2 = {r2_r:.4f}")
+            print("  -> SIGNIFICANT LEAKAGE! Random split inflates results.")
+            print("  -> Slight leakage. Should use group split for safety.")
+            print("  -> No clear leakage.")
+        print("Not enough data to compare leakage (missing aggregate.csv).")
+    print(f"\nFinished running the full pipeline for {MODEL_NAME} (holdout + k-fold + leakage check).")

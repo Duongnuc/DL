@@ -1,0 +1,67 @@
+"""File gop - 09_tcn.py
+goc: buoc_14_tcn.py, cong voi pipeline dung chung common_sequence_group.py,
+  2. Dinh nghia kien truc mo hinh + khong gian sieu tham so Optuna - tu buoc_14_tcn.py.
+duoc ghi vao thu muc an _cache/tcn/ de cac file tong hop phia sau (12, 13) co the
+Chay: python 09_tcn.py
+# PHAN 3/4 - KIEN TRUC MO HINH + SEARCH SPACE (gop tu buoc_14_tcn.py)
+"""Bước 14 - Mô hình TCN (Temporal Convolutional Network) - CNN 1D cho chuỗi co ngót.
+TCN LÀ GÌ?
+TCN (Temporal Convolutional Network - Mạng tích chập theo thời gian) là một kiến
+trúc CNN 1D dành cho dữ liệu chuỗi, đề xuất bởi Bai, Kolter & Koltun (2018).
+Thay vì xử lý tuần tự từng bước như RNN (GRU/LSTM), TCN dùng PHÉP TÍCH CHẬP 1D
+trượt dọc theo trục thời gian. Đây là một họ DL ĐẠI DIỆN khác hẳn RNN, bổ sung
+cho việc so sánh GRU/LSTM trong bài báo.
+Ba thành phần cốt lõi:
+1) CAUSAL CONVOLUTION (tích chập nhân quả):
+   - Đầu ra tại thời điểm t CHỈ phụ thuộc vào đầu vào tại t và các bước TRƯỚC t
+     (không "nhìn trộm" tương lai). Thực hiện bằng cách đệm (pad) bên TRÁI rồi
+     cắt bỏ phần thừa bên phải (Chomp). Phù hợp dự báo co ngót theo thời gian.
+2) DILATED CONVOLUTION (tích chập giãn nở):
+   - Hệ số giãn nở (dilation) tăng theo cấp số nhân qua từng tầng: 1, 2, 4, 8...
+   - Nhờ đó trường tiếp nhận (receptive field) tăng theo HÀM MŨ với số tầng,
+     giúp "nhìn xa" về quá khứ mà không cần quá nhiều tầng → bắt được xu hướng
+     dài hạn của đường cong co ngót.
+3) RESIDUAL BLOCK (khối phần dư):
+   - Mỗi khối = [Conv giãn nở → chuẩn hoá → ReLU → Dropout] x2, cộng kết nối tắt
+     (skip connection). Skip connection giúp huấn luyện sâu ổn định (chống
+     vanishing gradient) — chính là thứ ANNBasic THIẾU nên dễ bùng nổ trên OOD.
+TẠI SAO weight_norm THAY VÌ BatchNorm?
+Chuỗi được padding ở CUỐI để tạo batch. BatchNorm tính thống kê trên cả batch và
+trục thời gian → các vị trí padding (giá trị 0) sẽ làm sai lệch thống kê. weight_norm
+chuẩn hoá TRỌNG SỐ (không phụ thuộc dữ liệu/padding) nên ổn định hơn với chuỗi
+padding + mask. Đây là lựa chọn chuẩn trong bài báo TCN gốc.
+CHỐNG OVERFIT (rút kinh nghiệm lần trước TCN từng overfit)
+Dữ liệu chuỗi co ngót ít nhóm GID → TCN dễ overfit. Vì vậy search space giữ:
+  - Số kênh nhỏ (16-40), giãn nở vừa phải (2-4 tầng).
+  - Dropout sàn cao (0.1-0.4), weight decay mạnh (tới 3e-3).
+Nếu vẫn overfit trên k-fold → báo cáo trung thực như ANNBasic/TabNet.
+Chạy độc lập:  python buoc_14_tcn.py
+from torch.nn.utils import weight_norm  # TCN dung weight_norm thay BatchNorm (chuoi co padding)
+# Kiến trúc TCN
+    """Cắt bỏ `chomp_size` phần tử CUỐI trên trục thời gian.
+    Sau khi pad bên trái (k-1)*dilation để giữ tính nhân quả, độ dài đầu ra của
+    Conv1d dài hơn đầu vào (k-1)*dilation phần tử ở cuối. Chomp cắt phần thừa này
+    để đầu ra có cùng độ dài đầu vào VÀ không dùng thông tin tương lai.
+        # x: (batch, channels, time). Cắt chomp_size phần tử cuối nếu có.
+    """Một khối residual của TCN: [Conv giãn nở -> Chomp -> ReLU -> Dropout] x2 + skip."""
+        pad = (kernel_size - 1) * dilation  # đệm trái để giữ nhân quả
+        # Kết nối tắt: nếu số kênh vào != ra thì dùng 1x1 conv để khớp chiều.
+    """TCN seq2seq: dự đoán co ngót tại MỌI bước thời gian.
+        input_dim   (int):   số đặc trưng đầu vào mỗi bước.
+        num_channels(int):   số kênh ẩn mỗi tầng tích chập.
+        levels      (int):   số khối TemporalBlock (dilation = 1,2,4,... theo tầng).
+        kernel_size (int):   kích thước cửa sổ tích chập.
+        dropout     (float): tỷ lệ dropout trong mỗi khối.
+            dilation = 2 ** i  # giãn nở tăng theo cấp số nhân
+        # FC head: ánh xạ num_channels -> 1 tại mỗi bước thời gian (dùng Conv1d 1x1).
+        # x: (batch, seq_len, input_dim) -> (batch, input_dim, seq_len) cho Conv1d
+        y = self.tcn(x)          # (batch, num_channels, seq_len)
+        y = self.head(y)         # (batch, 1, seq_len)
+        return y.squeeze(1)      # (batch, seq_len)
+    """Tạo TCNRegressor từ bộ siêu tham số Optuna đề xuất."""
+    """Search space cho TCN — regularize mạnh để chống overfit trên chuỗi ít nhóm."""
+        # số kênh nhỏ để hạn chế capacity (chống overfit)
+        # số tầng -> trường tiếp nhận (receptive field) tăng theo hàm mũ
+        # cửa sổ tích chập
+        # dropout sàn cao
+        # weight decay MẠNH (log) để giữ trọng số nhỏ, ổn định trên test OOD

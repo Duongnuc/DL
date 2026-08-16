@@ -1,0 +1,290 @@
+"""Merged file - 04_ft_transformer.py
+original: buoc_05_ft_transformer.py, plus the shared pipeline common_tabular.py,
+  2. Define the model architecture + Optuna hyperparameter search space - from buoc_05_ft_transformer.py.
+written to the hidden _cache/ft_transformer/ directory so downstream summary files (12, 13) can
+Run: python 04_ft_transformer.py
+    te = regression_metrics(y_test_raw, pred_test_raw)
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+# PART 3/4 - MODEL ARCHITECTURE + SEARCH SPACE (merged from buoc_05_ft_transformer.py)
+Step 05 — FT-Transformer (Feature Tokenizer Transformer) for tabular data.
+FULL NAME:  FT-Transformer  (Feature Tokenizer + Transformer)
+This is a deep learning architecture designed SPECIFICALLY for tabular data
+(data with many numeric columns, each column being a feature).
+Original paper: Gorishniy et al., "Revisiting Deep Learning Models for Tabular
+DETAILED ARCHITECTURE — 4 MAIN STEPS
+Step 1 — Feature Tokenizer (encode features into tokens):
+    In natural language processing (NLP), each word is represented by a
+    multi-dimensional vector called a "word embedding". FT-Transformer applies a
+    similar idea to tabular data: each numeric column (feature) is multiplied by
+    its own separate weight vector to become a "token" with d_token
+    dimensions. Example: if you have 30 data columns and d_token = 48, then after this
+    step you'll have 30 tokens, each token a 48-dimensional vector. Simple
+    formula: token_i = feature_value_i × weight_i + bias_i.
+Step 2 — CLS Token (special token to aggregate information):
+    A special token called [CLS] (short for "classification") is
+    prepended to the token list. This token doesn't represent any
+    feature — its job is to "listen" to all the other features
+    via the attention mechanism in the next step, then aggregate
+    information from the whole data sample into itself. After step 2, there are 31 tokens
+Step 3 — Transformer Encoder (Transformer encoder with Self-Attention):
+    This is the core component. The Transformer Encoder consists of multiple
+    layers, each with two main parts:
+      a) Multi-Head Self-Attention: a mechanism that lets EVERY token "look at" and
+         "query" ALL other tokens. Specifically, each token produces three
+         vectors: Query, Key, Value. The attention
+         score between two tokens = token A's Query multiplied by token B's
+         Key, divided by the square root of d_token for numerical stability, then
+         passed through softmax to become a probability. The final result is a
+         weighted average of the other tokens' Values. "Multi-Head" means this
+         process is repeated in parallel multiple times (e.g. 4 heads) with
+         different weights, then the results are concatenated — helping the model learn
+         many different kinds of relationships between features.
+      b) Feed-Forward Network (FFN): a small MLP (2 Linear layers with a
+         GELU activation in between) applied to each token individually
+         for additional nonlinear transformation.
+    Each layer also has LayerNorm (normalization) and a Residual Connection (skip
+    connection — adds the input to the output so gradients propagate more easily).
+Step 4 — Head (prediction head):
+    Takes the output of the CLS token (first position) from the final Transformer
+    layer, passes it through LayerNorm → ReLU → Linear to produce 1 single
+    predicted value (a regression task).
+WHAT IS SELF-ATTENTION? (Explained for those new to deep learning)
+Imagine you're looking at 30 features of a house: area,
+number of rooms, house age, distance to the center, etc. A regular MLP
+model processes all the numbers at once but has NO explicit mechanism to
+know how "area" should interact with "number of rooms".
+Self-Attention solves this: each feature is allowed to "ask" every
+other feature whether they're related, and focus more on
+the important features. For example, "price per m²" may be very important when
+combined with "distance to the center" but less related to "year built".
+The model LEARNS these relationships from the data itself, without the user needing to
+specify them in advance.
+COMPARISON WITH A REGULAR MLP
+| Criterion                      | Traditional MLP    | FT-Transformer      |
+| Feature interaction       | Implicit (via hidden | Explicit (attention   |
+|                                | layer weights)      | score per pair)  |
+| Interpretability            | Low                | Higher (can view    |
+| Parameter count                    | Fewer              | More            |
+| Training speed             | Faster           | Slower             |
+| Effectiveness on small data   | Good                 | Needs more data   |
+|                                |                     | to show benefit      |
+| Effectiveness on large data   | Saturates early         | Keeps improving   |
+This file uses Optuna to automatically find the best hyperparameter set:
+  - d_token: embedding size of each token (32, 48, 64). A larger value
+    allows richer representation but costs more memory and is more prone to overfitting.
+  - n_heads: number of attention "heads" running in parallel. MUST divide d_token evenly since
+    each head processes d_token / n_heads dimensions.
+  - n_layers: number of stacked Transformer layers (1-3). More layers = deeper
+    learning but slower and needs more data.
+  - ff_mult: multiplier for the FFN dimension (2 or 4). FFN dim = d_token × ff_mult.
+  - dropout: probability of randomly "disabling" a neuron during training to reduce overfit.
+  - lr (learning rate): learning speed. Too large → doesn't converge, too small → slow.
+  - wd (weight decay): penalizes large weights to reduce overfit (L2 regularization).
+  - Learns complex interactions between features thanks to self-attention.
+  - Flexible architecture, easy to extend (add layers, increase d_token).
+  - Somewhat interpretable via attention weights.
+  - Often achieves the best (state-of-the-art) results on many large
+    tabular datasets, competing with or surpassing gradient boosting (XGBoost, LightGBM).
+  - Slower than MLP and especially much slower than XGBoost/LightGBM.
+  - Uses more GPU memory since the attention matrix has size O(n_features²).
+  - Needs more data to show its benefit (on small data, MLP
+    or gradient boosting is usually better).
+  - Many hyperparameters to tune (d_token, n_heads, n_layers, ff_mult, ...).
+  - batch_size usually needs to be smaller than MLP since it uses more RAM.
+HOW TO RUN
+Run standalone:  python buoc_05_ft_transformer.py
+Or called from the shared pipeline via the run_benchmark() function.
+# PART 1: NEURAL NETWORK ARCHITECTURE
+# Class 1: NumericalFeatureTokenizer — Turns each numeric column into a "token"
+    """Numerical Feature Tokenizer.
+    Purpose:
+        In NLP (natural language processing), each word is represented by
+        a multi-dimensional vector called a "word embedding". This class does the
+        same for tabular data: each numeric column (feature) is transformed
+        into a d_token-dimensional vector called a "token".
+    How it works:
+        Each feature i has its own pair of weights: weight[i] (a
+        d_token-dimensional vector) and bias[i] (a d_token-dimensional vector). Formula:
+            token_i = feature_value_i × weight[i] + bias[i]
+        This is essentially a linear transformation
+        SEPARATE for each feature, allowing the model to learn the optimal
+        representation for each type of feature (e.g. "area" and "number of rooms"
+        will have completely different weights).
+        n_features (int): Number of input feature columns (e.g. 30 columns).
+        d_token    (int): Dimension of each output token (e.g. 48 dimensions).
+                          A larger value → richer representation but
+                          costs more memory and is more prone to overfitting.
+    Input (forward):
+        x: Tensor of shape (batch_size, n_features)
+           — each row is 1 data sample, each column is 1 feature.
+           Example: a batch of 64 samples × 30 features → shape (64, 30).
+    Output:
+        Tensor of shape (batch_size, n_features, d_token)
+           — each feature has been turned into a d_token-dimensional vector.
+           Example: (64, 30, 48) — 64 samples, each with 30 tokens, each token
+           48-dimensional.
+        # weight: weight matrix of shape (n_features, d_token).
+        # Each row i is the separate weight vector for feature i.
+        # Randomly initialized with a small standard deviation (0.02) to avoid initial
+        # values that are too large, which could destabilize early training.
+        # bias: bias vector of shape (n_features, d_token).
+        # Initialized to 0 — the model will learn the appropriate value during
+        # training (gradient descent will update the bias).
+        # === Transform: token_i = x_i * weight_i + bias_i ===
+        # x initially has shape (batch, n_feat) — each element is a scalar.
+        # We need to multiply each scalar x_i by the weight_i vector (d_token dims).
+        # Intermediate step — add a final dimension to x:
+        #   x.unsqueeze(-1): (batch, n_feat) → (batch, n_feat, 1)
+        #   Now each feature is a 1-dimensional "vector", ready for broadcast multiply.
+        # weight.unsqueeze(0): (n_feat, d_token) → (1, n_feat, d_token)
+        #   Add a batch dimension at the front to broadcast across every sample in the batch.
+        # Broadcast multiply: (batch, n_feat, 1) × (1, n_feat, d_token)
+        #   → (batch, n_feat, d_token)
+        #   Each feature value is multiplied by its corresponding full weight vector.
+        # Add bias (also broadcast similarly) to produce the final result.
+# Class 2: FTTransformerRegressor — the complete FT-Transformer model
+    """FT-Transformer model for regression tasks on tabular data.
+    Overall architecture:
+          ↓
+        [Feature Tokenizer] — turns each feature into a d_token-dimensional token
+        [Add CLS Token] — prepends 1 special token
+        [Transformer Encoder] — n_layers of self-attention + FFN
+        [Take CLS Token at position 0] — this token has aggregated global information
+        [Head: LayerNorm → ReLU → Linear] — maps down to 1 value
+        (batch, 1)  — the final predicted value
+        in_dim  (int):   Number of input features (number of columns in the data table).
+        d_token (int):   Embedding size of each token. Common values:
+                         32, 48, 64. Larger → richer representation but slower.
+        n_heads (int):   Number of attention "heads" running in parallel. CONSTRAINT: d_token
+                         must be evenly divisible by n_heads since each head processes
+                         d_token / n_heads dimensions. Example: d_token=48, n_heads=4
+                         → each head processes 12 dimensions.
+        n_layers (int):  Number of stacked Transformer Encoder layers (1 to 3).
+                         More layers → learns more complex relationships but
+                         slower and needs more data.
+        ff_mult (int):   Multiplier for the Feed-Forward Network dimension inside
+                         each Encoder layer. FFN dim = d_token × ff_mult.
+                         Example: d_token=48, ff_mult=4 → FFN dim = 192.
+        dropout (float): Probability of randomly "disabling" a neuron during
+                         training (0.0 to 1.0). Common values: 0.05-0.30.
+                         This is a regularization technique that keeps the model from
+                         "memorizing" the training data (reduces overfit).
+    Forward pass — input and output:
+        Input:  x — Tensor of shape (batch_size, in_dim), each row is 1 sample.
+        Output:   Tensor of shape (batch_size, 1), predicted value for each sample.
+        # --- Component 1: Feature Tokenizer ---
+        # Turns each feature into a d_token-dimensional token.
+        # See the NumericalFeatureTokenizer class above for details.
+        # --- Component 2: CLS Token ---
+        # The CLS (Classification) token is a d_token-dimensional vector initialized
+        # to 0 and learned during training. This token's job is
+        # to "listen" to all feature tokens via the attention mechanism, then aggregate
+        # the sample's global information into itself.
+        # Shape: (1, 1, d_token) — expanded to (batch, 1, d_token) when used.
+        # --- Component 3: Transformer Encoder ---
+        # Creates a SINGLE encoder layer (stacked n_layers times below).
+        # Each layer consists of:
+        #   a) Multi-Head Self-Attention: tokens "look at" each other.
+        #      - d_model = d_token: input/output embedding size.
+        #      - nhead = n_heads: number of attention heads running in parallel.
+        #   b) Feed-Forward Network (FFN): a 2-layer MLP that adds a nonlinear transform.
+        #      - dim_feedforward = d_token * ff_mult: hidden dimension of the FFN.
+        #   c) Dropout: reduces overfit by randomly disabling neurons.
+        #   d) Activation = "gelu": the GELU activation function (smoother than ReLU, common
+        #      in Transformers).
+        #   e) batch_first = True: input tensor has batch as the first dimension
+        #      (batch, seq_len, d_model) instead of (seq_len, batch, d_model).
+        #   f) norm_first = True: applies LayerNorm BEFORE attention/FFN (called
+        #      Pre-Norm — more stable than the traditional Post-Norm, easier to train).
+        # Stacks n_layers encoder layers together.
+        # Data passes through layer 1 → layer 2 → ... → layer n_layers.
+        # Each layer further refines the token representation via repeated attention.
+        # --- Component 4: Head (prediction head) ---
+        # Takes the CLS token's output after passing through the Transformer, then maps
+        # it down to 1 single predicted value.
+        #   - LayerNorm(d_token): normalizes the CLS token vector (mean = 0,
+        #     variance = 1), stabilizing the gradient and speeding up convergence.
+        #   - ReLU(): nonlinear activation function — keeps positive values unchanged,
+        #     sets negative values to 0. Adds nonlinearity before the final layer.
+        #   - Linear(d_token, 1): fully connected layer mapping d_token dimensions
+        #     down to 1 real number — the predicted value (e.g. house price).
+        # ===== Step 1: Turn all features into tokens =====
+        # Input x: (batch, n_features) — e.g. (64, 30) for 64 samples, 30 features.
+        # After tokenizer: (batch, n_features, d_token) — e.g. (64, 30, 48).
+        # Each feature is now a 48-dimensional vector instead of just 1 number.
+        # ===== Step 2: Prepend the CLS token =====
+        # self.cls_token has shape (1, 1, d_token) — needs to be expanded to (batch, 1, d_token)
+        # so every sample in the batch has its own CLS token.
+        # expand() doesn't copy memory, just creates a "view" — saves RAM.
+        # Then concatenate the CLS token onto the front of the token list along dim=1.
+        # Result: (batch, n_feat + 1, d_token) — e.g. (64, 31, 48).
+        # ===== Step 3: Pass through the Transformer Encoder =====
+        # All 31 tokens (1 CLS + 30 features) pass through n_layers of
+        # self-attention. In each layer, every token is updated based on
+        # information from ALL other tokens (including itself). In particular, the CLS
+        # token "absorbs" information from all feature tokens.
+        # Shape unchanged: (batch, n_feat + 1, d_token).
+        # ===== Step 4: Take the CLS token (position 0) and pass through the Head =====
+        # encoded[:, 0, :] takes the token at position 0 (CLS) for every sample in the batch.
+        # Shape: (batch, d_token) — e.g. (64, 48).
+        # The Head transforms (64, 48) → (64, 1): 1 predicted value per sample.
+# PART 2: HYPERPARAMETER SEARCH SPACE
+# Optuna calls the search_space() function many times, each time trying a different
+# hyperparameter set (called a "trial"). Optuna uses a Bayesian optimization algorithm
+# (TPE — Tree-structured Parzen Estimator) to intelligently choose the next parameter
+# set based on the results of previous trials — much more efficient than grid
+# IMPORTANT NOTE ABOUT THE d_token AND n_heads CONSTRAINT:
+#   In Multi-Head Attention, d_token is split evenly across n_heads. Each head
+#   processes d_token / n_heads dimensions. If it doesn't divide evenly, PyTorch will raise an error.
+#   Example:
+#     d_token=48, n_heads=4 → 48/4 = 12 dims/head ✓ (divides evenly)
+#     d_token=48, n_heads=8 → 48/8 = 6 dims/head  ✓ (divides evenly)
+#     d_token=32, n_heads=8 → 32/8 = 4 dims/head  ✓ (divides evenly)
+#     d_token=48, n_heads=3 → 48/3 = 16            ✓ (but 3 isn't in the candidate list)
+#   The valid_heads function filters to only the n_heads values valid for the chosen d_token.
+    # --- Choose the token size ---
+    # d_token is the embedding size — determines how many dimensions each feature is
+    # represented with. Three options:
+    #   32: compact, fast, suited to data with few features or few samples.
+    #   48: balance between representation and speed (usually the best choice).
+    #   64: richest representation, suited to large data with many complex features.
+    # We don't go above 64 since tabular data usually doesn't need such a large embedding
+    # (unlike NLP where d_model is usually 256, 512, or 768).
+    # --- Filter to valid n_heads values ---
+    # Keep only the n_heads values that d_token divides evenly by.
+    # Example results for each d_token:
+    #   d_token=32: 32%2=0 ✓, 32%4=0 ✓, 32%8=0 ✓ → valid_heads = [2, 4, 8]
+    #   d_token=48: 48%2=0 ✓, 48%4=0 ✓, 48%8=0 ✗ → valid_heads = [2, 4]
+    #   d_token=64: 64%2=0 ✓, 64%4=0 ✓, 64%8=0 ✓ → valid_heads = [2, 4, 8]
+        # Learning rate: searched in range [0.0001, 0.002] on a log scale.
+        # A log scale means Optuna samples evenly between 1e-4, 3e-4, 1e-3, 2e-3
+        # instead of concentrating on the large-value region. Transformers usually need a smaller lr than MLP.
+        # Weight decay: an L2 regularization technique — penalizes
+        # weights with large absolute values so the model stays simpler, reducing overfit.
+        # A very small range [1e-6, 3e-4] since the Transformer already has dropout.
+        # Dropout: probability of randomly "disabling" a neuron during training.
+        # 0.05 = disable 5% (light regularization), 0.30 = disable 30% (heavy regularization).
+        # The token size chosen above.
+        # Number of attention heads — only chosen from the valid list (divides d_token evenly).
+        # Number of stacked Transformer Encoder layers (1 to 3).
+        # 1 layer: fast, few parameters, suited to simple relationships between features.
+        # 2-3 layers: learns more complex relationships but slower and more prone to overfitting.
+        # Multiplier for the Feed-Forward Network (FFN) dimension inside each layer.
+        # FFN dim = d_token × ff_mult. Example: d_token=48, ff_mult=4 → FFN=192.
+        # 2: small FFN, few parameters. 4: large FFN, stronger representation.
+# Function to build the model from the chosen hyperparameter set
+    """Initialize the FTTransformerRegressor model from the hyperparameter set.
+    This function is called by run_tabular_benchmark() whenever a new model
+    needs to be built (for each Optuna trial or each seed when training the final model).
+        in_dim (int):            Number of input features (automatically determined
+                                 from the data by the pipeline).
+        params (dict[str, Any]): The hyperparameter set chosen by Optuna, or the
+                                 best saved parameter set. Contains the keys:
+        nn.Module: FTTransformerRegressor model ready to train.
+        d_token=int(params["d_token"]),    # Cast to int since Optuna may return a float
+        n_heads=int(params["n_heads"]),    # for categorical values
+        n_layers=int(params["n_layers"]),  # suggest_int already returns int but cast again to be safe
+        ff_mult=int(params["ff_mult"]),    # Similarly — ensure the correct data type
+        dropout=float(params["dropout"]),  # Dropout must be a float (0.0 to 1.0)
+# PART 3: BENCHMARK-RUNNING AND MAIN FUNCTIONS

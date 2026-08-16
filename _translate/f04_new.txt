@@ -1,0 +1,290 @@
+"""File gop - 04_ft_transformer.py
+goc: buoc_05_ft_transformer.py, cong voi pipeline dung chung common_tabular.py,
+  2. Dinh nghia kien truc mo hinh + khong gian sieu tham so Optuna - tu buoc_05_ft_transformer.py.
+duoc ghi vao thu muc an _cache/ft_transformer/ de cac file tong hop phia sau (12, 13) co the
+Chay: python 04_ft_transformer.py
+    te = regression_metrics(y_test_raw, pred_test_raw)
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+# PHAN 3/4 - KIEN TRUC MO HINH + SEARCH SPACE (gop tu buoc_05_ft_transformer.py)
+Bước 05 — FT-Transformer (Feature Tokenizer Transformer) cho dữ liệu dạng bảng (tabular).
+TÊN ĐẦY ĐỦ:  FT-Transformer  (Feature Tokenizer + Transformer)
+Đây là kiến trúc deep learning được thiết kế RIÊNG cho dữ liệu dạng bảng
+(tabular data — dữ liệu có nhiều cột số, mỗi cột là một đặc trưng/feature).
+Bài báo gốc: Gorishniy et al., "Revisiting Deep Learning Models for Tabular
+KIẾN TRÚC CHI TIẾT — 4 BƯỚC CHÍNH
+Bước 1 — Feature Tokenizer (Mã hoá đặc trưng thành token):
+    Trong xử lý ngôn ngữ tự nhiên (NLP), mỗi từ được biểu diễn bằng một
+    vector nhiều chiều gọi là "word embedding". FT-Transformer áp dụng ý
+    tưởng tương tự cho dữ liệu bảng: mỗi cột số (feature) được nhân với
+    một vector trọng số riêng biệt để biến thành một "token" có d_token
+    chiều. Ví dụ: nếu bạn có 30 cột dữ liệu và d_token = 48 thì sau bước
+    này bạn sẽ có 30 token, mỗi token là một vector 48 chiều. Công thức
+    đơn giản: token_i = giá_trị_feature_i × weight_i + bias_i.
+Bước 2 — CLS Token (Token đặc biệt để tổng hợp thông tin):
+    Một token đặc biệt gọi là [CLS] (viết tắt của "classification") được
+    thêm vào đầu danh sách token. Token này không đại diện cho bất kỳ
+    feature nào — nhiệm vụ của nó là "lắng nghe" tất cả các feature khác
+    thông qua cơ chế attention ở bước tiếp theo, rồi tổng hợp thông tin
+    của toàn bộ mẫu dữ liệu vào chính nó. Sau bước 2, ta có 31 token
+Bước 3 — Transformer Encoder (Bộ mã hoá Transformer với Self-Attention):
+    Đây là thành phần cốt lõi. Transformer Encoder gồm nhiều tầng
+    (layer), mỗi tầng có hai phần chính:
+      a) Multi-Head Self-Attention: cơ chế cho phép MỖI token "nhìn" và
+         "hỏi thăm" TẤT CẢ các token khác. Cụ thể, mỗi token tạo ra ba
+         vector: Query (câu hỏi), Key (chìa khoá), Value (giá trị). Điểm
+         attention giữa hai token = Query của token A nhân với Key của
+         token B, chia cho căn bậc hai của d_token để ổn định số học, rồi
+         qua softmax để thành xác suất. Kết quả cuối là trung bình có
+         trọng số của Value các token khác. "Multi-Head" nghĩa là quá
+         trình này được lặp lại song song nhiều lần (ví dụ 4 heads) với
+         các trọng số khác nhau, rồi ghép kết quả lại — giúp mô hình học
+         được nhiều kiểu quan hệ khác nhau giữa các feature.
+      b) Feed-Forward Network (FFN): một mạng MLP nhỏ (2 tầng Linear với
+         hàm kích hoạt GELU ở giữa) được áp dụng cho từng token riêng lẻ
+         để biến đổi phi tuyến thêm.
+    Mỗi tầng còn có LayerNorm (chuẩn hoá) và Residual Connection (kết nối
+    tắt — cộng đầu vào với đầu ra để gradient lan truyền dễ dàng hơn).
+Bước 4 — Head (Đầu dự đoán):
+    Lấy output của CLS token (vị trí đầu tiên) từ tầng Transformer cuối
+    cùng, đưa qua LayerNorm → ReLU → Linear để ra 1 giá trị dự đoán duy
+    nhất (bài toán regression — hồi quy).
+SELF-ATTENTION LÀ GÌ? (Giải thích cho người chưa biết Deep Learning)
+Hãy tưởng tượng bạn đang xem xét 30 đặc trưng của một ngôi nhà: diện tích,
+số phòng, tuổi nhà, khoảng cách tới trung tâm, v.v. Một mô hình MLP thông
+thường xử lý tất cả các con số cùng lúc nhưng KHÔNG có cơ chế rõ ràng để
+biết "diện tích" nên tương tác với "số phòng" như thế nào.
+Self-Attention giải quyết vấn đề này: mỗi đặc trưng được phép "hỏi" mọi
+đặc trưng khác xem chúng có liên quan không, và tập trung nhiều hơn vào
+những đặc trưng quan trọng. Ví dụ, "giá mỗi m²" có thể rất quan trọng khi
+kết hợp với "khoảng cách tới trung tâm" nhưng ít liên quan tới "năm xây".
+Mô hình tự HỌC những mối quan hệ này từ dữ liệu, không cần người dùng chỉ
+định trước.
+SO SÁNH VỚI MLP THÔNG THƯỜNG
+| Tiêu chí                      | MLP truyền thống    | FT-Transformer      |
+| Tương tác giữa features       | Ngầm (qua trọng số | Rõ ràng (attention   |
+|                                | hidden layers)      | score cho từng cặp)  |
+| Khả năng diễn giải            | Thấp                | Cao hơn (xem được    |
+| Số tham số                    | Ít hơn              | Nhiều hơn            |
+| Tốc độ huấn luyện             | Nhanh hơn           | Chậm hơn             |
+| Hiệu quả trên dữ liệu nhỏ   | Tốt                 | Cần nhiều dữ liệu   |
+|                                |                     | hơn để phát huy      |
+| Hiệu quả trên dữ liệu lớn   | Bão hoà sớm         | Tiếp tục cải thiện   |
+File này dùng Optuna để tự động tìm bộ siêu tham số tốt nhất:
+  - d_token: kích thước embedding của mỗi token (32, 48, 64). Giá trị lớn
+    hơn cho phép biểu diễn phong phú hơn nhưng tốn bộ nhớ và dễ overfit.
+  - n_heads: số "đầu" attention chạy song song. PHẢI chia hết d_token vì
+    mỗi head xử lý d_token / n_heads chiều.
+  - n_layers: số tầng Transformer xếp chồng (1-3). Nhiều tầng = học sâu
+    hơn nhưng chậm hơn và cần nhiều dữ liệu hơn.
+  - ff_mult: hệ số nhân cho chiều FFN (2 hoặc 4). FFN dim = d_token × ff_mult.
+  - dropout: xác suất "tắt" ngẫu nhiên neuron khi train để chống overfit.
+  - lr (learning rate): tốc độ học. Quá lớn → không hội tụ, quá nhỏ → chậm.
+  - wd (weight decay): phạt trọng số lớn để chống overfit (L2 regularization).
+  - Học được tương tác phức tạp giữa các feature nhờ self-attention.
+  - Kiến trúc linh hoạt, dễ mở rộng (thêm tầng, tăng d_token).
+  - Có thể diễn giải phần nào thông qua attention weights.
+  - Thường đạt kết quả tốt nhất (state-of-the-art) trên nhiều bộ dữ liệu
+    tabular lớn, cạnh tranh hoặc vượt gradient boosting (XGBoost, LightGBM).
+  - Chậm hơn MLP và đặc biệt chậm hơn nhiều so với XGBoost/LightGBM.
+  - Tốn bộ nhớ GPU hơn do ma trận attention có kích thước O(n_features²).
+  - Cần nhiều dữ liệu hơn để phát huy hiệu quả (trên dữ liệu nhỏ, MLP
+    hoặc gradient boosting thường tốt hơn).
+  - Nhiều siêu tham số cần tune (d_token, n_heads, n_layers, ff_mult, ...).
+  - batch_size thường phải nhỏ hơn MLP vì tốn RAM hơn.
+CÁCH CHẠY
+Chạy độc lập:  python buoc_05_ft_transformer.py
+Hoặc được gọi từ pipeline chung thông qua hàm run_benchmark().
+# PHẦN 1: KIẾN TRÚC MẠNG NEURAL
+# Lớp 1: NumericalFeatureTokenizer — Biến mỗi cột số thành một "token"
+    """Bộ mã hoá đặc trưng số (Numerical Feature Tokenizer).
+    Mục đích:
+        Trong NLP (xử lý ngôn ngữ tự nhiên), mỗi từ được biểu diễn bằng
+        một vector nhiều chiều gọi là "word embedding". Lớp này làm điều
+        tương tự cho dữ liệu bảng: mỗi cột số (feature) được biến đổi
+        thành một vector d_token chiều gọi là "token".
+    Cách hoạt động:
+        Mỗi feature thứ i có một cặp trọng số riêng: weight[i] (vector
+        d_token chiều) và bias[i] (vector d_token chiều). Công thức:
+            token_i = giá_trị_feature_i × weight[i] + bias[i]
+        Đây thực chất là một phép biến đổi tuyến tính (linear transformation)
+        RIÊNG BIỆT cho từng feature, cho phép mô hình học cách biểu diễn
+        tối ưu cho từng loại đặc trưng (ví dụ: "diện tích" và "số phòng"
+        sẽ có trọng số hoàn toàn khác nhau).
+        n_features (int): Số lượng cột đặc trưng đầu vào (ví dụ: 30 cột).
+        d_token    (int): Số chiều của mỗi token đầu ra (ví dụ: 48 chiều).
+                          Giá trị lớn hơn → biểu diễn phong phú hơn nhưng
+                          tốn bộ nhớ và dễ overfit hơn.
+    Đầu vào (forward):
+        x: Tensor kích thước (batch_size, n_features)
+           — mỗi hàng là một mẫu dữ liệu, mỗi cột là một feature.
+           Ví dụ: batch 64 mẫu × 30 features → shape (64, 30).
+    Đầu ra:
+        Tensor kích thước (batch_size, n_features, d_token)
+           — mỗi feature đã được biến thành một vector d_token chiều.
+           Ví dụ: (64, 30, 48) — 64 mẫu, mỗi mẫu có 30 token, mỗi token
+           48 chiều.
+        # weight: ma trận trọng số kích thước (n_features, d_token).
+        # Mỗi hàng i là vector trọng số riêng cho feature thứ i.
+        # Khởi tạo ngẫu nhiên với độ lệch chuẩn nhỏ (0.02) để tránh giá trị
+        # ban đầu quá lớn gây mất ổn định khi bắt đầu huấn luyện.
+        # bias: vector hệ số dịch chuyển kích thước (n_features, d_token).
+        # Khởi tạo bằng 0 — mô hình sẽ tự học giá trị phù hợp trong quá
+        # trình huấn luyện (gradient descent sẽ cập nhật bias).
+        # === Phép biến đổi: token_i = x_i * weight_i + bias_i ===
+        # x ban đầu có shape (batch, n_feat) — mỗi phần tử là một số vô hướng.
+        # Ta cần nhân mỗi số vô hướng x_i với vector weight_i (d_token chiều).
+        # Bước trung gian — thêm chiều cuối cho x:
+        #   x.unsqueeze(-1): (batch, n_feat) → (batch, n_feat, 1)
+        #   Bây giờ mỗi feature là một "vector" 1 chiều, sẵn sàng nhân broadcast.
+        # weight.unsqueeze(0): (n_feat, d_token) → (1, n_feat, d_token)
+        #   Thêm chiều batch ở đầu để broadcast với mọi mẫu trong batch.
+        # Phép nhân broadcast: (batch, n_feat, 1) × (1, n_feat, d_token)
+        #   → (batch, n_feat, d_token)
+        #   Mỗi giá trị feature được nhân với toàn bộ vector weight tương ứng.
+        # Cộng bias (cũng broadcast tương tự) để ra kết quả cuối cùng.
+# Lớp 2: FTTransformerRegressor — Mô hình FT-Transformer hoàn chỉnh
+    """Mô hình FT-Transformer cho bài toán hồi quy (regression) trên dữ liệu bảng.
+    Kiến trúc tổng thể:
+          ↓
+        [Feature Tokenizer] — biến mỗi feature thành token d_token chiều
+        [Thêm CLS Token] — ghép thêm 1 token đặc biệt vào đầu
+        [Transformer Encoder] — n_layers tầng self-attention + FFN
+        [Lấy CLS Token ở vị trí 0] — token này đã tổng hợp thông tin toàn cục
+        [Head: LayerNorm → ReLU → Linear] — ánh xạ xuống 1 giá trị
+        (batch, 1)  — giá trị dự đoán cuối cùng
+        in_dim  (int):   Số features đầu vào (số cột trong bảng dữ liệu).
+        d_token (int):   Kích thước embedding của mỗi token. Giá trị phổ biến:
+                         32, 48, 64. Lớn hơn → biểu diễn giàu hơn nhưng chậm hơn.
+        n_heads (int):   Số "đầu" attention chạy song song. RÀNG BUỘC: d_token
+                         phải chia hết cho n_heads vì mỗi head xử lý
+                         d_token / n_heads chiều. Ví dụ: d_token=48, n_heads=4
+                         → mỗi head xử lý 12 chiều.
+        n_layers (int):  Số tầng Transformer Encoder xếp chồng (1 đến 3).
+                         Nhiều tầng hơn → học được quan hệ phức tạp hơn nhưng
+                         chậm hơn và cần nhiều dữ liệu hơn.
+        ff_mult (int):   Hệ số nhân cho chiều của Feed-Forward Network bên
+                         trong mỗi tầng Encoder. FFN dim = d_token × ff_mult.
+                         Ví dụ: d_token=48, ff_mult=4 → FFN dim = 192.
+        dropout (float): Xác suất "tắt" ngẫu nhiên neuron trong quá trình
+                         huấn luyện (0.0 đến 1.0). Giá trị phổ biến: 0.05-0.30.
+                         Đây là kỹ thuật regularization giúp mô hình không
+                         "học thuộc" dữ liệu train (chống overfit).
+    Forward pass — đầu vào và đầu ra:
+        Đầu vào:  x — Tensor shape (batch_size, in_dim), mỗi hàng là một mẫu.
+        Đầu ra:   Tensor shape (batch_size, 1), giá trị dự đoán cho mỗi mẫu.
+        # --- Thành phần 1: Feature Tokenizer ---
+        # Biến mỗi feature thành một token d_token chiều.
+        # Xem chi tiết tại lớp NumericalFeatureTokenizer ở trên.
+        # --- Thành phần 2: CLS Token ---
+        # CLS (Classification) token là một vector d_token chiều được khởi tạo
+        # bằng 0 và sẽ được học trong quá trình huấn luyện. Token này có nhiệm
+        # vụ "lắng nghe" tất cả feature tokens qua cơ chế attention, rồi tổng
+        # hợp thông tin toàn cục của mẫu dữ liệu vào chính nó.
+        # Shape: (1, 1, d_token) — sẽ được expand ra (batch, 1, d_token) khi dùng.
+        # --- Thành phần 3: Transformer Encoder ---
+        # Tạo MỘT tầng encoder đơn lẻ (sẽ được xếp chồng n_layers lần bên dưới).
+        # Mỗi tầng gồm:
+        #   a) Multi-Head Self-Attention: các token "nhìn" lẫn nhau.
+        #      - d_model = d_token: kích thước embedding đầu vào/ra.
+        #      - nhead = n_heads: số đầu attention chạy song song.
+        #   b) Feed-Forward Network (FFN): MLP 2 tầng biến đổi phi tuyến.
+        #      - dim_feedforward = d_token * ff_mult: chiều ẩn của FFN.
+        #   c) Dropout: chống overfit bằng cách tắt ngẫu nhiên neuron.
+        #   d) Activation = "gelu": hàm kích hoạt GELU (mượt hơn ReLU, phổ
+        #      biến trong Transformer).
+        #   e) batch_first = True: tensor đầu vào có batch ở chiều đầu tiên
+        #      (batch, seq_len, d_model) thay vì (seq_len, batch, d_model).
+        #   f) norm_first = True: áp dụng LayerNorm TRƯỚC attention/FFN (gọi là
+        #      Pre-Norm — ổn định hơn Post-Norm truyền thống, giúp train dễ hơn).
+        # Xếp chồng n_layers tầng encoder lại với nhau.
+        # Dữ liệu đi qua tầng 1 → tầng 2 → ... → tầng n_layers.
+        # Mỗi tầng tinh chỉnh thêm biểu diễn token nhờ attention lặp lại.
+        # --- Thành phần 4: Head (Đầu dự đoán) ---
+        # Lấy output của CLS token sau khi đi qua Transformer, rồi ánh xạ
+        # xuống 1 giá trị dự đoán duy nhất.
+        #   - LayerNorm(d_token): chuẩn hoá vector CLS token (trung bình = 0,
+        #     phương sai = 1) giúp ổn định gradient và tăng tốc hội tụ.
+        #   - ReLU(): hàm kích hoạt phi tuyến — giữ nguyên giá trị dương,
+        #     đặt giá trị âm về 0. Thêm tính phi tuyến trước tầng cuối.
+        #   - Linear(d_token, 1): tầng fully connected ánh xạ d_token chiều
+        #     xuống 1 số thực — chính là giá trị dự đoán (ví dụ: giá nhà).
+        # ===== Bước 1: Biến tất cả features thành tokens =====
+        # Input x: (batch, n_features) — ví dụ (64, 30) cho 64 mẫu, 30 features.
+        # Sau tokenizer: (batch, n_features, d_token) — ví dụ (64, 30, 48).
+        # Mỗi feature giờ đây là một vector 48 chiều thay vì chỉ 1 số.
+        # ===== Bước 2: Thêm CLS token vào vị trí đầu tiên =====
+        # self.cls_token có shape (1, 1, d_token) — cần expand ra (batch, 1, d_token)
+        # để mỗi mẫu trong batch đều có CLS token riêng.
+        # expand() không copy bộ nhớ mà chỉ tạo "view" — tiết kiệm RAM.
+        # Sau đó ghép (concatenate) CLS token vào đầu danh sách token theo dim=1.
+        # Kết quả: (batch, n_feat + 1, d_token) — ví dụ (64, 31, 48).
+        # ===== Bước 3: Đưa qua Transformer Encoder =====
+        # Tất cả 31 token (1 CLS + 30 features) đi qua n_layers tầng
+        # self-attention. Trong mỗi tầng, mỗi token được cập nhật dựa trên
+        # thông tin từ TẤT CẢ token khác (kể cả chính nó). Đặc biệt, CLS
+        # token sẽ "hấp thụ" thông tin từ tất cả feature tokens.
+        # Shape không đổi: (batch, n_feat + 1, d_token).
+        # ===== Bước 4: Lấy CLS token (vị trí 0) và đưa qua Head =====
+        # encoded[:, 0, :] lấy token ở vị trí 0 (CLS) cho tất cả mẫu trong batch.
+        # Shape: (batch, d_token) — ví dụ (64, 48).
+        # Head biến (64, 48) → (64, 1): một giá trị dự đoán cho mỗi mẫu.
+# PHẦN 2: KHÔNG GIAN TÌM KIẾM SIÊU THAM SỐ (SEARCH SPACE)
+# Optuna sẽ gọi hàm search_space() nhiều lần, mỗi lần thử một bộ siêu tham
+# số khác nhau (gọi là "trial"). Optuna dùng thuật toán Bayesian optimization
+# (TPE — Tree-structured Parzen Estimator) để thông minh chọn bộ tham số tiếp
+# theo dựa trên kết quả các trial trước — hiệu quả hơn nhiều so với grid
+# LƯU Ý QUAN TRỌNG VỀ RÀNG BUỘC d_token VÀ n_heads:
+#   Trong Multi-Head Attention, d_token được chia đều cho n_heads. Mỗi head
+#   xử lý d_token / n_heads chiều. Nếu không chia hết, PyTorch sẽ báo lỗi.
+#   Ví dụ:
+#     d_token=48, n_heads=4 → 48/4 = 12 chiều/head ✓ (chia hết)
+#     d_token=48, n_heads=8 → 48/8 = 6 chiều/head  ✓ (chia hết)
+#     d_token=32, n_heads=8 → 32/8 = 4 chiều/head  ✓ (chia hết)
+#     d_token=48, n_heads=3 → 48/3 = 16            ✓ (nhưng 3 không nằm trong danh sách)
+#   Hàm valid_heads lọc ra chỉ những giá trị n_heads hợp lệ cho d_token đã chọn.
+    # --- Chọn kích thước token ---
+    # d_token là kích thước embedding — quyết định mỗi feature được biểu diễn
+    # bằng bao nhiêu chiều. Ba lựa chọn:
+    #   32: nhỏ gọn, nhanh, phù hợp dữ liệu ít feature hoặc ít mẫu.
+    #   48: cân bằng giữa biểu diễn và tốc độ (thường là lựa chọn tốt nhất).
+    #   64: biểu diễn phong phú nhất, phù hợp dữ liệu lớn nhiều feature phức tạp.
+    # Không chọn lớn hơn 64 vì dữ liệu tabular thường không cần embedding quá lớn
+    # (khác với NLP nơi d_model thường là 256, 512, hoặc 768).
+    # --- Lọc ra các giá trị n_heads hợp lệ ---
+    # Chỉ giữ lại các n_heads mà d_token chia hết cho nó.
+    # Ví dụ kết quả với từng d_token:
+    #   d_token=32: 32%2=0 ✓, 32%4=0 ✓, 32%8=0 ✓ → valid_heads = [2, 4, 8]
+    #   d_token=48: 48%2=0 ✓, 48%4=0 ✓, 48%8=0 ✗ → valid_heads = [2, 4]
+    #   d_token=64: 64%2=0 ✓, 64%4=0 ✓, 64%8=0 ✓ → valid_heads = [2, 4, 8]
+        # Learning rate (tốc độ học): tìm trong khoảng [0.0001, 0.002] theo thang log.
+        # Thang log nghĩa là Optuna ưu tiên thử đều giữa 1e-4, 3e-4, 1e-3, 2e-3
+        # thay vì tập trung vào vùng giá trị lớn. Transformer thường cần lr nhỏ hơn MLP.
+        # Weight decay (phân rã trọng số): kỹ thuật L2 regularization — phạt các
+        # trọng số có giá trị tuyệt đối lớn để mô hình đơn giản hơn, chống overfit.
+        # Khoảng rất nhỏ [1e-6, 3e-4] vì Transformer đã có dropout.
+        # Dropout: xác suất "tắt" neuron ngẫu nhiên khi train.
+        # 0.05 = tắt 5% (ít regularization), 0.30 = tắt 30% (nhiều regularization).
+        # Kích thước token đã chọn ở trên.
+        # Số attention heads — chỉ chọn từ danh sách hợp lệ (chia hết d_token).
+        # Số tầng Transformer Encoder (1 đến 3).
+        # 1 tầng: nhanh, ít tham số, phù hợp quan hệ đơn giản giữa features.
+        # 2-3 tầng: học được quan hệ phức tạp hơn nhưng chậm và dễ overfit hơn.
+        # Hệ số nhân cho chiều Feed-Forward Network (FFN) bên trong mỗi tầng.
+        # FFN dim = d_token × ff_mult. Ví dụ: d_token=48, ff_mult=4 → FFN=192.
+        # 2: FFN nhỏ, ít tham số. 4: FFN lớn, biểu diễn mạnh hơn.
+# Hàm tạo mô hình từ bộ siêu tham số đã chọn
+    """Khởi tạo mô hình FTTransformerRegressor từ bộ siêu tham số.
+    Hàm này được gọi bởi run_tabular_benchmark() mỗi khi cần tạo mô hình
+    mới (cho mỗi trial của Optuna hoặc mỗi seed khi train final model).
+        in_dim (int):            Số features đầu vào (được tự động xác định
+                                 từ dữ liệu bởi pipeline).
+        params (dict[str, Any]): Bộ siêu tham số do Optuna chọn hoặc bộ
+                                 tham số tốt nhất đã lưu. Chứa các key:
+        nn.Module: Mô hình FTTransformerRegressor sẵn sàng huấn luyện.
+        d_token=int(params["d_token"]),    # Ép kiểu int vì Optuna có thể trả về float
+        n_heads=int(params["n_heads"]),    # cho categorical values
+        n_layers=int(params["n_layers"]),  # suggest_int đã trả về int nhưng ép thêm cho chắc
+        ff_mult=int(params["ff_mult"]),    # Tương tự — đảm bảo kiểu dữ liệu đúng
+        dropout=float(params["dropout"]),  # Dropout phải là float (0.0 đến 1.0)
+# PHẦN 3: HÀM CHẠY BENCHMARK VÀ MAIN

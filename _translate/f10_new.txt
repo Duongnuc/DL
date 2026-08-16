@@ -1,0 +1,57 @@
+"""File gop - 10_gbdt.py
+File nay GOP LAI (khong bo sot) noi dung tu 2 file goc trong pipeline nghien
+cuu goc: buoc_21_gbdt_kfold.py (mo hinh GBDT - XGBoost + LightGBM - danh gia
+qua group k-fold, lam moc so sanh voi cac mo hinh Deep Learning) va
+buoc_26_robustness_gbdt.py (kiem tra do ben cua ket qua group k-fold: chia
+fold theo NGUON TAI LIEU thay vi theo GID, va doi seed phep chia), cong voi
+pipeline dung chung common_tabular.py, common_console_summary.py va
+Ly do can moc GBDT: cay quyet dinh tang cuong gradient (GBDT) thuong thang
+Deep Learning tren du lieu dang bang (Shwartz-Ziv & Armon 2022; Grinsztajn
+2022). Bai bao can moc nay de doi chieu cong bang voi 9 mo hinh DL, dung
+chung cach chia fold, tien xu ly, target va ngan sach Optuna (8 trial/fold).
+File nay TU CHAY DUOC DOC LAP (khong import file .py nao khac trong bo gui
+thay), va gom du 4 phan viec:
+  2. Dinh nghia khong gian sieu tham so + ham huan luyen cho XGBoost/LightGBM.
+  3. Chay GROUP K-FOLD (5 fold, Optuna 8 trial/fold) cho ca 2 mo hinh, SAU DO
+     chay 2 kiem tra do ben: (A) chia fold theo nguon tai lieu (seed 42),
+     (B) chia fold theo GID voi seed 43 va 44 (ngoai seed 42 chinh thuc).
+  4. In toan bo ket qua (R2/RMSE/MAE, bang tong hop do ben) ra man hinh
+     console - khong chi ghi file.
+Cac file CSV/JSON trung gian van duoc ghi vao thu muc an _cache/gbdt/ de
+file tong hop phia sau (12_tong_hop_so_sanh.py) co the doc lai ma khong can
+train lai tu dau.
+Chay: python 10_gbdt.py
+# GBDT khong dung torch, nhung van dat truoc de dam bao thu tu import ON DINH
+# giong het cac file 01-06 (torch truoc numpy/pandas/sklearn tren Windows), va
+# de tai su dung cac ham chia fold/metrics dung chung (group_kfold_split_indices,
+    te = regression_metrics(y_test_raw, pred_test_raw)
+# PHAN 3/4 - GBDT: XGBoost + LightGBM + kiem tra do ben (gop tu buoc_21, buoc_26)
+# Cau hinh chung cho GBDT (dung chung boi ca phan k-fold chinh va phan robust)
+N_TRIALS = 8            # cung ngan sach voi cac mo hinh DL (buoc_12)
+MAX_ROUNDS = 3000       # tuong duong max_epochs; early stopping quyet dinh so vong thuc
+EARLY_STOP = 100        # tuong duong patience
+VAL_FRACTION = 0.1765   # ty le tach val trong phan train/val khi chia lai theo nguon
+# Khong gian tim kiem sieu tham so + ham huan luyen cho tung ho GBDT
+# (gop tu buoc_21_gbdt_kfold.py)
+    # Dung API native lgb.train (sklearn wrapper cua lightgbm 4.5 xung khac
+    # voi scikit-learn moi do tham so force_all_finite bi doi ten).
+    """Mot fold: Optuna -> mo hinh tot nhat -> metrics thang goc."""
+    """Chay k-fold cho mot mo hinh GBDT (dinh dang dau ra giong run_tabular_kfold)."""
+# Kiem tra do ben (robustness) cho GBDT (gop tu buoc_26_robustness_gbdt.py)
+# (A) Chia fold theo NGUON TAI LIEU thay vi theo GID (nac thang ro ri thu 3).
+# (B) Doi seed phep chia (43, 44 ngoai 42 chinh thuc) voi fold theo GID.
+# Cac ham xgb_fit/lgbm_fit/MODELS o day mang hau to "_seeded"/"_ROBUST" vi
+# buoc_26 dinh nghia lai cung ten ham nhung KHAC chu ky (them tham so seed) -
+# giu nguyen ten se de-ghi-de len ban goc cua buoc_21 va lam vo pipeline chinh.
+    """Nhu group_kfold_split_indices nhung nhom theo NGUON tai lieu (phan tang fc28)."""
+# PHAN 4/4 - CHAY THAT: GROUP K-FOLD (2 MO HINH) + KIEM TRA DO BEN + IN KET QUA
+    print("[GBDT] BUOC 1/3: Chuan bi du lieu (loc + feature engineering)")
+    print(f"[GBDT] BUOC 2/3: Group K-Fold ({N_SPLITS} fold, Optuna {N_TRIALS} trial/fold, XGBoost + LightGBM)")
+    print("[GBDT] BUOC 3/3: Kiem tra do ben (chia theo nguon tai lieu + doi seed)")
+    print(f"Du lieu: {len(df)} diem, {df['GID'].nunique()} GID, {src.nunique()} nguon tai lieu")
+    print("\n(A) Chia fold theo NGUON tai lieu (seed 42):")
+    print("\n(B) Chia fold theo GID voi seed thay the (43, 44):")
+    print("\nBang tong hop kiem tra do ben (GroupKFold seed 42 la ket qua chinh thuc o BUOC 2/3):")
+    print(f"Da ghi: {robust_path}")
+    print("\nDa chay xong toan bo pipeline cho GBDT (k-fold XGBoost+LightGBM + 2 kiem tra do ben).")
+    print(f"\n[thoi gian chay] {(time.time() - _t0) / 60.0:.2f} phut", flush=True)

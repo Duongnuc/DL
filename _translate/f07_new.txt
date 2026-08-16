@@ -1,0 +1,530 @@
+"""File gop - 07_gru.py
+File nay GOP LAI (khong bo sot) noi dung tu file goc trong pipeline nghien cuu
+goc: buoc_07_gru.py, cong voi pipeline dung chung common_sequence_group.py,
+  1. Chuan bi du lieu dang chuoi (sequence) tu Excel goc - tu buoc_01.
+  2. Dinh nghia kien truc mo hinh + khong gian sieu tham so Optuna - tu buoc_07_gru.py.
+  3. Chay HOLDOUT (chia train/val/test 1 lan theo GID) VA GROUP K-FOLD (5 fold)
+     de danh gia do on dinh, dung chung engine cua common_sequence_group.py.
+duoc ghi vao thu muc an _cache/gru/ de cac file tong hop phia sau (12, 13) co the
+Chay: python 07_gru.py
+# PHAN 1/4 - PIPELINE DUNG CHUNG CHO MO HINH SEQUENCE (gop tu common_sequence_group.py)
+# Tắt Dynamo (trình biên dịch JIT của PyTorch 2.x) vì không cần thiết trên CPU
+# và có thể gây lỗi hoặc chậm hơn trong một số trường hợp.
+# Giới hạn số luồng để tránh tranh chấp tài nguyên khi chạy nhiều thí nghiệm song song.
+# Đặt số luồng PyTorch = 1 để tránh overhead đa luồng trên CPU nhỏ.
+# Nếu RuntimeError xảy ra (ví dụ: đã được đặt trước đó), bỏ qua.
+# Các cột cần loại bỏ khỏi tập đặc trưng (features):
+# - GID: mã nhóm, dùng để chia dữ liệu, không phải feature
+# - dt_days: thời gian (ngày), đã nằm trong chuỗi theo thứ tự
+# - y_shrinkage_total_mm_per_m: biến mục tiêu (target), không được dùng làm input
+# - y_log1p: biến mục tiêu đã log-transform, cũng không được dùng làm input
+# - seq_ok: cờ đánh dấu chuỗi hợp lệ, chỉ dùng để lọc
+# Các cột phân loại sẽ được chuyển thành one-hot encoding.
+    """Cấu hình cho một lần chạy benchmark mô hình chuỗi.
+    Đây là dataclass chứa tất cả tham số cần thiết để chạy thí nghiệm.
+    Người dùng chỉ cần tạo một đối tượng SequenceBenchmarkConfig rồi truyền
+    vào hàm run_sequence_benchmark().
+    Các tham số:
+        data_path: Đường dẫn tới file CSV chứa dữ liệu đầu vào đã tiền xử lý.
+        output_dir: Thư mục lưu kết quả (CSV, JSON) sau khi chạy xong.
+        model_name: Tên mô hình (ví dụ: "LSTM", "GRU", "Transformer"),
+            dùng để ghi vào báo cáo kết quả.
+        seeds: Danh sách các seed ngẫu nhiên. Mỗi seed tạo một lần chia dữ liệu
+            và huấn luyện khác nhau, giúp đánh giá độ ổn định của mô hình.
+            Mặc định là [42].
+        n_trials: Số lần thử siêu tham số (hyperparameter) bằng Optuna.
+            Optuna sẽ chạy n_trials lần, mỗi lần thử một bộ tham số khác nhau,
+            rồi chọn bộ tốt nhất. Mặc định là 1 (không tối ưu, chạy nhanh).
+        max_epochs: Số epoch tối đa cho mỗi lần huấn luyện. Một epoch là một
+            vòng duyệt qua toàn bộ tập train. Mặc định là 10.
+        patience: Số epoch liên tiếp mà val loss không cải thiện thì dừng sớm
+            (early stopping). Giúp tránh overfitting. Mặc định là 3.
+        batch_size: Số chuỗi (sequence) trong mỗi batch khi huấn luyện.
+            Batch lớn hơn thì nhanh hơn nhưng tốn RAM hơn. Mặc định là 16.
+        device: Thiết bị tính toán ("cpu" hoặc "cuda"). Mặc định là "cpu".
+    # Số fold cho group k-fold cross-validation (chỉ dùng bởi run_sequence_kfold).
+    """Lưu chỉ số (index) của các hàng thuộc tập train, val, test.
+    Sau khi chia dữ liệu theo nhóm (GID), mỗi hàng trong DataFrame gốc
+    sẽ được gán vào một trong ba tập. Dataclass này lưu lại các chỉ số đó
+    để có thể trích xuất dữ liệu sau.
+    """Chuyển đường dẫn tuyệt đối thành đường dẫn tương đối so với thư mục gốc package.
+    Mục đích: lưu vào metadata JSON để kết quả có thể đọc được trên
+    các máy tính khác nhau (portable). Nếu không thể tính relative path,
+    trả về đường dẫn dạng POSIX (dùng dấu /).
+    """Ghi các file đầu ra rỗng khi benchmark bị bỏ qua (skip).
+    Khi xảy ra lỗi (ví dụ: không đủ bộ nhớ, dữ liệu không hợp lệ),
+    hàm này tạo các file CSV/JSON rỗng để pipeline không bị gãy.
+    File metadata sẽ ghi lại lý do bỏ qua (skip_reason) để người dùng
+    có thể kiểm tra sau.
+    """Đặt seed ngẫu nhiên cho tất cả các thư viện để kết quả có thể tái lập.
+    Deep learning có nhiều nguồn ngẫu nhiên: khởi tạo trọng số, shuffle dữ liệu,
+    dropout, v.v. Đặt cùng một seed giúp chạy lại ra cùng kết quả (reproducibility).
+    """Tính các chỉ số đánh giá mô hình hồi quy.
+    Trả về một dict chứa:
+        - N: số lượng mẫu
+        - R2: hệ số xác định (1.0 là hoàn hảo, có thể âm nếu dự đoán rất tệ)
+        - RMSE: căn bậc hai sai số bình phương trung bình (đơn vị giống y)
+        - MAE: sai số tuyệt đối trung bình (đơn vị giống y)
+        - NRMSE_IQR_pct: RMSE chuẩn hoá theo khoảng tứ phân vị (%), giúp so sánh
+          giữa các tập dữ liệu có phân bố khác nhau
+    """Tổng hợp kết quả từ nhiều seed thành giá trị trung bình và độ lệch chuẩn.
+    Khi chạy nhiều seed, mỗi seed cho một dòng kết quả. Hàm này gom nhóm
+    theo (Split, Family, Model) rồi tính mean và std cho từng chỉ số,
+    giúp đánh giá mô hình có ổn định hay không.
+    """Chia giá trị thành q nhóm theo phân vị (quantile) để dùng cho stratified split.
+    Stratified split nghĩa là chia dữ liệu sao cho mỗi tập (train/val/test)
+    có phân bố tương tự nhau. Hàm này tạo nhãn nhóm (0, 1, ..., q-1) dựa
+    trên phân vị. Trả về None nếu không đủ dữ liệu để chia (mỗi nhóm cần
+    ít nhất 2 phần tử).
+    """Chia dữ liệu thành train/val/test theo nhóm GID (group-wise split).
+    Đây là bước quan trọng nhất để tránh data leakage trong bài toán chuỗi:
+    - Mỗi GID (nhóm mẫu thí nghiệm) chỉ xuất hiện trong MỘT tập duy nhất.
+    - Nếu cùng một GID có mặt trong cả train và test, mô hình sẽ "nhớ" thay
+      vì "học", dẫn đến đánh giá sai lệch (overfitting ẩn).
+    1. Tính median fc28 của mỗi GID để làm chiến lược phân tầng (stratify).
+       Điều này đảm bảo các tập có phân bố fc28 tương tự nhau.
+    2. Chia GID thành train (70%) và tạm thời (temp, 30%) bằng stratified split.
+    3. Chia temp thành val (15%) và test (15%) bằng stratified split tiếp.
+    4. Ánh xạ ngược từ GID về chỉ số hàng trong DataFrame gốc.
+    # Tính median fc28 cho mỗi GID để dùng làm tiêu chí phân tầng
+    # Bước 1: tách 70% train, 30% tạm (temp)
+    # Bước 2: tách 30% tạm thành 15% val + 15% test
+    # Ánh xạ ngược: từ danh sách GID của mỗi tập, tìm chỉ số hàng tương ứng
+    """Tạo các fold cho GROUP K-FOLD cross-validation trên dữ liệu chuỗi.
+    Bản sao của logic trong common_tabular nhưng dùng cho pipeline sequence:
+    - Mỗi GID (nhóm mẫu) chỉ thuộc tập test ĐÚNG MỘT lần qua K fold, không bao
+      giờ đồng thời ở train và test trong cùng fold → không rò rỉ dữ liệu.
+    - Phân tầng theo fc28 trung vị của mỗi GID để các fold cân bằng phân bố.
+    Quy trình mỗi fold k:
+        test = GID của fold k; phần còn lại tách train/val (val ≈ val_fraction
+        của phần còn lại, phân tầng theo fc28 nếu được).
+    Trả về: danh sách [(SplitIndices, fold_id)] với fold_id chạy 0..K-1.
+    """Tạo báo cáo chẩn đoán về việc chia dữ liệu.
+    Kiểm tra số hàng, số nhóm GID, và đặc biệt là có bị trùng GID giữa
+    các tập hay không (Overlap). Nếu Overlap > 0 nghĩa là có data leakage
+    và cần sửa lại logic chia dữ liệu.
+    """Trích xuất DataFrame con cho mỗi tập train, val, test từ chỉ số đã chia.
+    Reset index để các DataFrame con có index liên tục từ 0,
+    tránh lỗi khi truy cập theo vị trí (iloc) sau này.
+    """Xây dựng ma trận đặc trưng (feature matrix) cho mỗi tập.
+    1. Loại bỏ các cột trong EXCLUDE_COLUMNS (target, GID, v.v.).
+    2. Chuẩn hoá (StandardScaler) các cột số: fit CHỈ trên train,
+       rồi transform cả val và test. Đây là nguyên tắc vàng để tránh
+       data leakage - val/test không được ảnh hưởng tới quá trình fit.
+    3. One-hot encoding cho các cột phân loại. Đảm bảo val/test có cùng
+       các cột với train (reindex), điền 0 cho các giá trị không có.
+    Trả về: (train_feat, val_feat, test_feat, danh_sách_tên_cột)
+    # Điền giá trị thiếu (NaN) bằng median CHỈ tính trên train (tránh leakage).
+    # Chuẩn hoá cột số: fit trên train, transform trên tất cả
+    # One-hot encoding cho cột phân loại
+        # Đảm bảo val/test có cùng cột với train, điền 0 cho cột thiếu
+    # Ghép cột số và cột phân loại thành một ma trận đặc trưng hoàn chỉnh
+    """Chuyển DataFrame thành danh sách các chuỗi (X, y) theo từng GID.
+    Mỗi GID tạo thành một chuỗi thời gian: các hàng được sắp xếp theo dt_days
+    (ngày đo), tạo thành một chuỗi các bước thời gian (time steps).
+    Phép biến đổi log1p cho target:
+        Nếu use_log1p=True (mặc định), target y sẽ được chuyển sang log1p:
+            y_transformed = log(1 + clip(y, 0))
+        Tại sao cần log1p?
+        - Giá trị co ngót (shrinkage) có phân bố lệch phải (right-skewed):
+          phần lớn giá trị nhỏ, một số ít giá trị rất lớn.
+        - log1p nén phạm vi giá trị, giúp gradient ổn định hơn khi huấn luyện.
+        - Không có log1p, các giá trị lớn sẽ tạo gradient rất lớn, có thể
+          làm mô hình không hội tụ (gradient exploding).
+        - clip(y, 0) đảm bảo không có giá trị âm trước khi lấy log.
+        - Giống với pipeline tabular để đảm bảo cùng phép biến đổi target.
+        Khi tính metric cuối cùng, cần dùng expm1 (nghịch đảo của log1p)
+        để chuyển về thang đo gốc (mm/m).
+    # Tạo cột __row_id__ để ánh xạ giữa df gốc và features_df sau khi sắp xếp
+    # Sắp xếp theo GID và dt_days để tạo chuỗi thời gian đúng thứ tự
+    # Ghép features theo __row_id__ để giữ đúng thứ tự sau khi sắp xếp
+        # Dùng log1p(clip(y, 0)) thay vì giá trị thô để loss nhỏ hơn, mô hình học tốt hơn.
+        # Dùng clip(lower=0) giống với pipeline tabular để đảm bảo cùng phép biến đổi target.
+        y = np.log1p(np.clip(y_raw, 0.0, None)) if use_log1p else y_raw
+        sequences_y.append(y)
+    """Dataset PyTorch cho dữ liệu chuỗi.
+    Đây là lớp bọc (wrapper) để PyTorch DataLoader có thể lấy từng chuỗi
+    theo chỉ số. Mỗi phần tử là một cặp (X, y) với:
+        - X: mảng 2D (số_bước_thời_gian, số_features)
+        - y: mảng 1D (số_bước_thời_gian,) chứa target tại mỗi bước
+    """Gom nhiều chuỗi có độ dài khác nhau thành một batch bằng padding và mask.
+    Vấn đề: các chuỗi trong cùng batch có thể có độ dài khác nhau
+    (ví dụ: GID A có 5 bước, GID B có 8 bước). PyTorch yêu cầu tensor
+    phải có kích thước cố định trong mỗi chiều.
+    Giải pháp - Padding và Mask:
+    1. Padding: Thêm số 0 vào cuối các chuỗi ngắn để tất cả có cùng độ dài
+       bằng chuỗi dài nhất trong batch. Giá trị 0 này là giả, không có ý nghĩa.
+    2. Mask: Tạo tensor nhị phân (0/1) đánh dấu vị trí nào là dữ liệu thật (1)
+       và vị trí nào là padding (0). Khi tính loss, chỉ tính trên vị trí mask=1.
+        - batch_x: tensor (batch_size, max_len, feat_dim) - đặc trưng đã padding
+        - batch_y: tensor (batch_size, max_len) - target đã padding
+        - batch_mask: tensor (batch_size, max_len) - mask đánh dấu vị trí thật
+    # Tìm độ dài lớn nhất trong batch để padding các chuỗi ngắn hơn
+    # Khởi tạo bằng 0: các vị trí padding sẽ tự động là 0
+    for i, (x, y) in enumerate(zip(xs, ys)):
+        # Chỉ điền dữ liệu thật vào phần đầu, phần còn lại giữ nguyên 0
+        batch_y[i, :length] = y
+        # Đánh dấu vị trí có dữ liệu thật = 1.0
+    """Tính Mean Squared Error chỉ trên các vị trí có dữ liệu thật (mask=1).
+    Tại sao cần mask?
+    Vì các chuỗi trong batch có độ dài khác nhau nên đã được padding bằng 0.
+    Nếu tính MSE trên cả vị trí padding, mô hình sẽ bị "phạt" vì dự đoán
+    khác 0 tại những vị trí padding - điều này vô nghĩa và làm sai lệch
+    quá trình học. Mask giúp bỏ qua các vị trí padding, chỉ tính loss trên
+    dữ liệu thật.
+    Công thức: sum((pred - target)^2 * mask) / sum(mask)
+    clamp_min(1.0) tránh chia cho 0 khi không có vị trí hợp lệ nào.
+    # Nhân với mask: vị trí padding (mask=0) sẽ có loss = 0
+    # Chia cho tổng mask (số vị trí thật) thay vì tổng phần tử
+    """Chạy mô hình trên toàn bộ DataLoader và thu thập dự đoán.
+    Đặt model ở chế độ eval (tắt dropout, batch norm dùng running stats)
+    và dùng torch.no_grad() để không tính gradient, tiết kiệm bộ nhớ.
+    Chỉ lấy các giá trị tại vị trí mask > 0.5 (dữ liệu thật, không padding).
+    Trả về: (y_true, y_pred) dạng mảng 1D trên không gian log1p.
+            # Chỉ lấy dự đoán tại vị trí có dữ liệu thật (không phải padding)
+    """Do do quan trong cua tung feature bang permutation importance cho mo hinh chuoi.
+    Voi moi feature, xao tron (shuffle) gia tri cua no THEO TRUC THOI GIAN
+    trong tung chuoi (giu nguyen do dai tung mau, chi pha vo trat tu thoi gian
+    cua rieng feature do), roi do MSE tren val tang len bao nhieu so voi
+    baseline. Dung lai model DA HUAN LUYEN xong cua fold hien tai (khong
+    huan luyen lai).
+    """Huấn luyện mô hình chuỗi với các kỹ thuật chống overfitting.
+    Hàm này sử dụng nhiều kỹ thuật quan trọng trong deep learning:
+       - Adam là thuật toán tối ưu phổ biến nhất cho DL, kết hợp momentum
+         và adaptive learning rate (tự điều chỉnh tốc độ học cho từng tham số).
+       - AdamW là phiên bản cải tiến với weight decay tách rời (decoupled),
+         giúp regularization hiệu quả hơn Adam gốc.
+       - lr (learning rate): tốc độ học, quyết định bước nhảy khi cập nhật trọng số.
+       - weight_decay (wd): hệ số phạt trọng số lớn, giúp tránh overfitting.
+       - Tự động giảm learning rate khi val loss ngừng cải thiện.
+       - factor=0.5: mỗi lần giảm, lr mới = lr cũ * 0.5.
+       - patience=max(2, patience//3): chờ bao nhiêu epoch trước khi giảm.
+       - Giúp mô hình "tinh chỉnh" khi đã gần hội tụ.
+       - Cắt gradient nếu norm vượt quá 1.0.
+       - Tại sao? Trong mô hình chuỗi (RNN, LSTM), gradient có thể bùng nổ
+         (exploding gradient) khi lan truyền qua nhiều bước thời gian.
+       - Clipping giúp ổn định quá trình huấn luyện.
+       - Dừng huấn luyện sớm nếu val loss không cải thiện sau 'patience' epoch.
+       - Tại sao? Sau một thời gian, mô hình bắt đầu "nhớ" tập train thay vì
+         "học" quy luật chung (overfitting). Val loss sẽ tăng lên.
+       - Lưu lại trọng số tốt nhất (best_state) và khôi phục sau khi dừng.
+    Trả về: (model_tốt_nhất, epoch_tốt_nhất, val_loss_tốt_nhất, val_loss_history)
+    val_loss_history chứa val_loss của TỪNG epoch đã chạy (phục vụ vẽ learning curve).
+    # Khởi tạo AdamW với learning rate và weight decay từ Optuna
+    # Scheduler tự động giảm lr khi val loss ngừng cải thiện
+        # Chế độ huấn luyện: bật dropout, batch norm dùng batch stats
+            # Xoá gradient cũ trước khi tính gradient mới
+            # Tính loss chỉ trên vị trí thật (không padding)
+            # Lan truyền ngược để tính gradient
+            # Cắt gradient để tránh bùng nổ (exploding gradient)
+            # Cập nhật trọng số
+        # Đánh giá trên tập validation sau mỗi epoch
+        # Thông báo cho scheduler biết val loss hiện tại
+            # Tìm thấy mô hình tốt hơn, lưu lại trọng số
+            # Val loss không cải thiện, tăng bộ đếm chờ
+                # Đã chờ đủ lâu, dừng sớm (early stopping)
+    # Khôi phục trọng số tốt nhất (không phải trọng số cuối cùng)
+    """Đọc dữ liệu, lọc chuỗi hợp lệ, chia theo GID, và xây dựng features.
+    Đây là hàm tiện ích gom các bước tiền xử lý thành một lời gọi duy nhất:
+    1. Đọc CSV và lọc chỉ giữ các hàng có seq_ok=1 (chuỗi hợp lệ).
+    3. Xây dựng ma trận đặc trưng (build_feature_frames).
+    4. Tạo báo cáo chẩn đoán (split_diagnostics).
+    # Chỉ giữ các hàng có chuỗi hợp lệ (seq_ok=1)
+    """Chạy toàn bộ quy trình benchmark cho một mô hình chuỗi.
+    Đây là hàm chính điều phối toàn bộ quá trình:
+    Quy trình Optuna tìm siêu tham số:
+        - Optuna là thư viện tối ưu siêu tham số (hyperparameter optimization).
+        - Mỗi "trial" là một lần thử với bộ tham số khác nhau (lr, hidden_size, v.v.).
+        - suggest_params_fn: hàm do người dùng cung cấp, yêu cầu Optuna đề xuất
+          giá trị cho từng tham số (ví dụ: lr trong khoảng [1e-4, 1e-2]).
+        - Optuna chọn bộ tham số có val loss thấp nhất.
+    Lưu mô hình tốt nhất (KHÔNG huấn luyện lại từ đầu):
+        - Lý do: nếu huấn luyện lại với cùng tham số nhưng trọng số khởi tạo
+          ngẫu nhiên khác, kết quả có thể rất khác. Vì vậy, lưu trực tiếp
+          state_dict của mô hình tốt nhất tìm được trong quá trình Optuna.
+    Chuyển đổi dự đoán từ log-space về thang đo gốc:
+        - Mô hình dự đoán trong không gian log1p.
+        - Clip dự đoán trong khoảng [0, log_cap] trước khi expm1.
+        - log_cap = 120% giá trị max của train_y trong log-space.
+        - Tại sao clip? Nếu mô hình dự đoán giá trị quá lớn trong log-space,
+          expm1 sẽ tạo ra giá trị cực lớn (bùng nổ), làm hỏng metric.
+        - expm1 là nghịch đảo của log1p: expm1(log1p(x)) = x.
+        cfg: cấu hình benchmark (xem SequenceBenchmarkConfig).
+        build_model_fn: hàm tạo mô hình, nhận (số_features, params) -> nn.Module.
+        suggest_params_fn: hàm đề xuất tham số cho Optuna.
+    Trả về: dict ánh xạ tên file -> đường dẫn file kết quả.
+            # Lưu mô hình tốt nhất từ Optuna (KHÔNG huấn luyện lại từ đầu).
+            # Lý do: huấn luyện lại từ đầu với trọng số ngẫu nhiên khác -> kết quả có thể rất khác.
+                """Hàm mục tiêu cho Optuna: huấn luyện mô hình và trả về val loss."""
+                # Lưu state_dict của mô hình có val loss thấp nhất qua tất cả các trial
+            # Tạo Optuna study với mục tiêu tối thiểu hoá val loss
+            # Khôi phục mô hình tốt nhất thay vì huấn luyện lại
+                # Trường hợp dự phòng: nếu không có state đã lưu, huấn luyện lại
+            # Gom metric của 3 tập (train/val/test) vào 1 dòng kết quả duy nhất
+            # Giới hạn trong log-space: 120% giá trị max của train_y.
+            # Mục đích: tránh expm1 bùng nổ khi mô hình dự đoán giá trị quá lớn.
+                # Clip dự đoán trước khi expm1 để tránh giá trị bùng nổ
+                # Chuyển từ log-space về thang đo gốc (mm/m) để tính metric
+        return write_skip_outputs(cfg, f"Không đủ bộ nhớ hoặc lỗi khi huấn luyện mô hình sequence. Lỗi gốc: {exc}")
+    # Tạo DataFrame tổng hợp từ tất cả các seed
+    # Ghi kết quả ra các file CSV và JSON
+    """Dự đoán từng chuỗi (theo GID) một, trả về (gid_per_point, pred_log_per_point).
+    Đánh giá riêng từng chuỗi (batch size = 1) để giữ đúng ánh xạ điểm -> GID,
+    phục vụ thu thập dự đoán out-of-fold ở mức từng điểm đo (cho scatter/residual).
+    """Chạy GROUP K-FOLD cross-validation cho một mô hình chuỗi (GRU/LSTM).
+    Khác với run_sequence_benchmark (một lần chia holdout cho mỗi seed), hàm này
+    chia GID thành cfg.n_splits fold. Mỗi fold lần lượt làm test một lần; phần còn
+    lại chia train/val và tối ưu siêu tham số bằng Optuna. Mỗi fold dùng riêng
+    StandardScaler + imputation fit TRÊN TRAIN của fold đó (không rò rỉ dữ liệu).
+    Kết quả ghi ra (mirror pipeline tabular):
+        kfold_summary.csv   : mỗi dòng = một fold (metrics train/val/test).
+        kfold_aggregate.csv : trung bình ± độ lệch chuẩn QUA CÁC FOLD.
+        oof_predictions.csv : dự đoán out-of-fold ở mức điểm đo (GID, Fold, y_true, y_pred).
+        split_summary.csv   : chẩn đoán chia dữ liệu từng fold (kiểm tra overlap GID).
+        best_params.json    : siêu tham số tốt nhất của từng fold.
+    Dùng cfg.seeds[0] làm seed chia fold để tái lập được.
+            # Gom lich su val_loss tung epoch cua model tot nhat fold nay (phuc vu learning curve)
+            # Do do quan trong feature (permutation importance) bang model da huan luyen cua fold nay
+            # Out-of-fold predictions ở mức điểm đo (giữ đúng GID cho từng điểm)
+        return write_skip_outputs(cfg, f"Loi khi chay sequence k-fold ({cfg.model_name}). Loi goc: {exc}")
+# common_sequence_group.py import torch khong bang try/except (khac common_tabular.py):
+# neu code chay toi day nghia la torch da import thanh cong o tren, nen luon la None.
+    report = {'xlsx_path': str(xlsx_path), 'filter_policy': {'type': 'total', 'curing_equals': 3, 'exclude_file_prefix': 's_036', 'rh_test_min': 0.4, 'coarse_agg_gt': 0, 'fine_agg_gt': 0, 'fc28_range': [17, 110], 'tcur_range': [20, 30], 'v_s_gt': 11.3, 'cem_type_equals': 1, 'keep_s036': False, 'drop_curve_if_any_decrease': cfg.drop_curve_if_any_decrease, 'eps_y_decrease': cfg.eps_y_decrease, 'min_points_per_curve': cfg.min_points_per_curve, 'min_points_for_seq': cfg.min_points_for_seq}, 'counts': {'raw_curves': raw_curve_count, 'raw_points': raw_point_count, 'after_metadata_filter_curves': kept_curve_count, 'after_metadata_filter_points': kept_point_count, 'after_drop_duplicates_curves': dedup_curve_count, 'after_drop_duplicates_points': dedup_point_count, 'after_min_points_curves': min_curve_count, 'after_min_points_points': min_point_count, 'after_monotonicity_curves': monotonic_curve_count, 'after_monotonicity_points': monotonic_point_count, 'before_dropna_curves': before_dropna_curves, 'before_dropna_points': before_dropna_points, 'after_dropna_curves': after_dropna_curves, 'after_dropna_points': after_dropna_points, 'final_curves': final_curve_count, 'final_points': final_point_count, 'seq_ok_curves': seq_ok_curve_count, 'seq_ok_points': int(len(seq_ready))}, 'drops': {'s036_rows_in_info': s036_total, 's036_rows_kept_after_filter': s036_kept, 'dropped_for_min_points_curves': dropped_for_min_points, 'removed_nonmonotonic_curves': removed_nonmonotonic, 'dropped_for_missing_core_points': before_dropna_points - after_dropna_points}, 'imputation': {'median_impute_noncore': cfg.median_impute_noncore, 'imputed_columns': imputed_columns}, 'notes': ['This report documents the current canonical filtering policy.', 'Curing and Cem_type are hard-filtered in the current policy to keep the benchmark within the supported data regime.', 's_036 is excluded in the current policy.', 'Train-only preprocessing is enforced later at experiment time, not during dataset build.', 'Median imputation of non-core columns is now disabled at build time (NaN are kept); imputation is performed per train-fold inside the model pipeline to avoid preprocessing leakage.']}
+        ax.plot(grp["epoch"], grp["val_loss"], marker="o", markersize=2.5, lw=1.2,
+# PHAN 3/4 - KIEN TRUC MO HINH + SEARCH SPACE (gop tu buoc_07_gru.py)
+Bước 07 - Mô hình GRU (Gated Recurrent Unit) cho dự đoán chuỗi thời gian co ngót.
+GRU LÀ GÌ?
+GRU (viết tắt của Gated Recurrent Unit, tạm dịch: Đơn vị hồi quy có cổng) là
+một kiến trúc mạng nơ-ron hồi quy (Recurrent Neural Network - RNN) được đề xuất
+bởi Cho et al. năm 2014. Đây là phiên bản đơn giản hoá của LSTM, được thiết kế
+để giải quyết bài toán "mất trí nhớ dài hạn" (vanishing gradient) mà RNN truyền
+thống gặp phải, nhưng với ít tham số hơn LSTM.
+Ý tưởng cốt lõi: khi xử lý chuỗi dữ liệu theo thời gian (ví dụ: mức co ngót
+của bê tông qua từng ngày), mô hình cần "nhớ" các thông tin quan trọng từ quá
+khứ và "quên" những gì không còn liên quan. GRU thực hiện điều này thông qua
+hai cổng (gate) đặc biệt.
+KIẾN TRÚC CHI TIẾT - HAI CỔNG CỦA GRU
+Tại mỗi bước thời gian (time step) t, GRU nhận vào:
+  - x_t  : vector đặc trưng (features) tại thời điểm t
+  - h_{t-1}: trạng thái ẩn (hidden state) từ bước trước
+Và tính toán qua 2 cổng:
+1) RESET GATE (Cổng đặt lại) - ký hiệu r_t:
+   Công thức: r_t = sigmoid(W_r * [h_{t-1}, x_t])
+   - Quyết định "bao nhiêu phần trăm" thông tin quá khứ (h_{t-1}) sẽ bị BỎ QUA
+     khi tính trạng thái ẩn mới.
+   - Nếu r_t gần 0: mô hình gần như "quên hết" quá khứ, chỉ dựa vào dữ liệu
+     hiện tại x_t -> hữu ích khi gặp điểm ngoặt, thay đổi đột ngột.
+   - Nếu r_t gần 1: mô hình giữ lại hầu hết quá khứ -> hữu ích khi xu hướng
+     vẫn đang tiếp diễn ổn định.
+   - Ví dụ co ngót: nếu đang ở giai đoạn sấy ban đầu (thay đổi nhanh),
+     reset gate có thể "mở" để phản ứng nhanh với dữ liệu mới.
+2) UPDATE GATE (Cổng cập nhật) - ký hiệu z_t:
+   Công thức: z_t = sigmoid(W_z * [h_{t-1}, x_t])
+   - Quyết định "bao nhiêu phần trăm" trạng thái ẩn mới (vừa tính) sẽ THAY THẾ
+     trạng thái ẩn cũ.
+   - Nếu z_t gần 1: GIỮ NGUYÊN trạng thái cũ h_{t-1}, bỏ qua thông tin mới
+     -> hoạt động như "đường tắt" (skip connection), giúp chống vanishing gradient.
+   - Nếu z_t gần 0: THAY THẾ hoàn toàn bằng trạng thái mới
+     -> mô hình chủ động cập nhật khi có thông tin quan trọng.
+   - Ví dụ co ngót: ở giai đoạn ổn định (co ngót chậm), update gate có xu hướng
+     gần 1 để "giữ" trạng thái, không cần cập nhật nhiều.
+Trạng thái ẩn mới được tính:
+   h_tilde = tanh(W * [r_t * h_{t-1}, x_t])   <-- trạng thái "ứng viên"
+   h_t     = z_t * h_{t-1} + (1 - z_t) * h_tilde  <-- kết hợp cũ + mới
+Lưu ý quan trọng: GRU KHÔNG có cell state riêng biệt (khác với LSTM). Toàn bộ
+bộ nhớ được gói gọn trong hidden state h_t. Điều này khiến GRU đơn giản hơn
+nhưng cũng hạn chế khả năng lưu trữ thông tin siêu dài hạn.
+TẠI SAO DÙNG GRU CHO CHUỖI THỜI GIAN CO NGÓT?
+Dữ liệu co ngót bê tông có đặc điểm:
+  - Là chuỗi thời gian: các phép đo được ghi nhận theo thứ tự thời gian
+  - Có xu hướng (trend): co ngót thường tăng rồi ổn định dần theo thời gian
+  - Phụ thuộc bối cảnh: giá trị co ngót ngày hôm nay phụ thuộc vào ngày trước
+  - Độ dài thay đổi: mỗi nhóm mẫu (GID) có số lượng phép đo khác nhau
+GRU phù hợp vì:
+  a) Xử lý chuỗi tuần tự một cách tự nhiên (từng time step)
+  b) Cổng update giúp "nhớ" xu hướng dài hạn của co ngót
+  c) Cổng reset giúp "thích ứng" khi có thay đổi đột ngột
+  d) Nhanh hơn LSTM nên tiết kiệm thời gian huấn luyện
+  e) Ít tham số hơn LSTM nên ít bị overfitting với dữ liệu nhỏ
+KIẾN TRÚC SEQUENCE-TO-SEQUENCE (SEQ2SEQ) PREDICTION
+Thay vì chỉ dự đoán 1 giá trị cuối cùng (many-to-one), mô hình này dự đoán
+giá trị tại MỌI bước thời gian (many-to-many, hay seq2seq):
+  Input:  [x_1, x_2, ..., x_T]    (T bước, mỗi bước có D features)
+  Output: [y_1, y_2, ..., y_T]    (T giá trị dự đoán co ngót)
+Cách hoạt động:
+  Bước 1: GRU xử lý x_1 -> sinh ra h_1
+  Bước 2: GRU xử lý x_2 (cùng h_1) -> sinh ra h_2
+  Bước T: GRU xử lý x_T (cùng h_{T-1}) -> sinh ra h_T
+  Sau đó, mỗi h_t được đưa qua một lớp Linear (FC head):
+Lý do dùng seq2seq: mỗi điểm đo co ngót đều quan trọng, không chỉ điểm cuối.
+Mô hình học dự đoán TOÀN BỘ đường cong co ngót, không chỉ giá trị cuối cùng.
+SO SÁNH VỚI LSTM (Long Short-Term Memory)
+  Số cổng:              2 (reset + update)          3 (forget + input + output)
+  Cell state riêng:     KHÔNG                       CÓ (bộ nhớ dài hạn riêng)
+  Số tham số:           Ít hơn (~25% ít hơn LSTM)  Nhiều hơn
+  Tốc độ huấn luyện:   Nhanh hơn                   Chậm hơn
+  Chuỗi ngắn (<100):   Thường đủ tốt               Có thể quá phức tạp
+  Chuỗi dài (>500):    Có thể kém hơn              Thường tốt hơn
+  Dữ liệu ít:          Ít overfitting hơn           Dễ overfitting hơn
+Với dữ liệu co ngót (chuỗi thường ngắn-trung bình, dữ liệu không quá lớn),
+GRU thường là lựa chọn tốt và hiệu quả hơn LSTM.
+CÁCH TỐI ƯU: OPTUNA + MASKED MSE + LOG1P TARGET
+   - Tự động tìm kiếm bộ siêu tham số tốt nhất (hidden_dim, num_layers, v.v.)
+   - Thay vì thử hết mọi tổ hợp (grid search), Optuna dùng thuật toán thông minh
+     (TPE - Tree-structured Parzen Estimator) để "đoán" vùng tham số triển vọng
+   - Tiết kiệm rất nhiều thời gian so với grid search
+2) Masked MSE (Mean Squared Error có mặt nạ):
+   - Vì các chuỗi có độ dài khác nhau, ta phải padding (đệm) các chuỗi ngắn
+     bằng giá trị giả (thường là 0) để tạo batch đồng nhất
+   - Mask (mặt nạ) đánh dấu điểm nào là THẬT, điểm nào là GIẢ (do padding)
+   - Khi tính loss, chỉ tính MSE trên các điểm THẬT, bỏ qua các điểm padding
+   - Nếu không dùng mask: mô hình sẽ "học" dự đoán 0 cho các vị trí padding,
+     làm sai lệch kết quả
+3) Log1p target (biến đổi logarit):
+   - Giá trị co ngót có phân phối lệch phải (skewed): nhiều giá trị nhỏ, ít
+     giá trị lớn
+   - log1p(y) = log(1 + y) giúp "nén" phân phối, làm cho phân phối đối xứng hơn
+   - Mô hình học dễ hơn khi target có phân phối gần chuẩn (Gaussian)
+   - Khi dự đoán, dùng expm1() để chuyển ngược: expm1(ŷ) = exp(ŷ) - 1
+ƯU ĐIỂM CỦA GRU
+  + Đơn giản, ít tham số -> huấn luyện nhanh, ít overfitting
+  + Hiệu quả tốt cho chuỗi ngắn đến trung bình
+  + Dễ triển khai và debug hơn LSTM
+  + Gradient flow tốt nhờ cổng update (giống skip connection)
+  + Phù hợp khi dữ liệu hạn chế (ít bị overfitting)
+NHƯỢC ĐIỂM CỦA GRU
+  - Không có cell state riêng -> khó nhớ thông tin rất xa trong chuỗi dài
+  - Với chuỗi rất dài (>500 bước), LSTM thường vượt trội hơn
+  - Ít linh hoạt hơn LSTM trong việc kiểm soát dòng thông tin
+  - Không phải lúc nào cũng tốt hơn LSTM; cần thử cả hai để so sánh
+  Chạy độc lập:  python buoc_07_gru.py
+  Chạy từ pipeline tổng (buoc_10): run_benchmark(cfg) sẽ được gọi tự động
+    """Tạo thông báo lỗi chi tiết khi không thể khởi tạo mô hình.
+    Hàm này được gọi khi torch hoặc common_sequence_group import thất bại.
+    Thay vì để chương trình crash với traceback khó hiểu, ta tạo thông báo
+    rõ ràng bằng tiếng Việt, kèm gợi ý cách khắc phục.
+        str: Thông báo lỗi bao gồm nguyên nhân và gợi ý sửa chữa.
+        f"Không thể khởi tạo mô hình {MODEL_NAME}. "
+        f"Lỗi torch: {TORCH_IMPORT_ERROR}. Lỗi helper: {SEQ_IMPORT_ERROR}. "
+        "Gợi ý: dùng environment DL riêng, cài torch."
+    """Mô hình hồi quy GRU theo kiến trúc sequence-to-sequence (seq2seq).
+    Lớp này đóng gói toàn bộ kiến trúc mạng nơ-ron GRU dùng để dự đoán giá trị
+    co ngót tại MỌI bước thời gian trong chuỗi (không chỉ bước cuối).
+    Kiến trúc bên trong:
+    1. Lớp GRU (nn.GRU):
+       - Nhận chuỗi features đầu vào, xử lý tuần tự từng bước thời gian
+       - Tại mỗi bước, áp dụng 2 cổng (reset + update) để cập nhật hidden state
+       - Có thể xếp chồng nhiều tầng (num_layers > 1) để học biểu diễn phức tạp hơn
+       - Khi num_layers > 1: output của tầng dưới là input cho tầng trên,
+         dropout được áp dụng GIỮA các tầng (không áp dụng ở tầng cuối)
+       - Lớp kết nối đầy đủ (fully connected) chuyển hidden state -> giá trị dự đoán
+       - Ánh xạ từ hidden_dim chiều -> 1 chiều (1 giá trị co ngót)
+       - Được áp dụng CÙNG MỘT BỘ TRỌNG SỐ cho mọi bước thời gian
+         (parameter sharing, giúp giảm overfitting)
+    Kích thước dữ liệu (tensor shapes):
+    Đầu vào x:
+        - batch_size: số chuỗi được xử lý đồng thời trong 1 batch
+          Ví dụ: batch_size=16 nghĩa là 16 nhóm mẫu (GID) cùng lúc
+        - seq_len:    độ dài chuỗi (số bước thời gian), đã được padding về cùng
+                      độ dài trong 1 batch. Ví dụ: 50 ngày đo
+        - input_dim:  số features tại mỗi bước thời gian
+                      Ví dụ: [tuổi, nhiệt_độ, độ_ẩm, tỷ_lệ_xi_măng, ...] = 8 features
+    Trạng thái ẩn (hidden state) sau GRU:
+        - hidden_dim: kích thước vector trạng thái ẩn, do người dùng chọn
+          Ví dụ: hidden_dim=64 nghĩa là mỗi bước thời gian có vector 64 chiều
+                 chứa thông tin "tóm tắt" của toàn bộ quá khứ đến thời điểm đó
+    Đầu ra (predictions):
+        - Mỗi phần tử là 1 giá trị dự đoán co ngót tại bước thời gian tương ứng
+    input_dim  (int):   Số lượng features đầu vào tại mỗi bước thời gian.
+                        Được xác định tự động từ dữ liệu huấn luyện.
+    hidden_dim (int):   Kích thước hidden state. Giá trị lớn hơn cho phép mô hình
+                        học các pattern phức tạp hơn, nhưng tăng thời gian tính toán
+                        và nguy cơ overfitting. Thường thử: 32, 48, 64.
+    num_layers (int):   Số tầng GRU xếp chồng. 1 tầng thường đủ cho dữ liệu đơn
+                        giản; 2 tầng giúp học biểu diễn trừu tượng hơn nhưng chậm hơn.
+    dropout    (float): Tỷ lệ dropout (0.0 đến 1.0) GIỮA các tầng GRU.
+                        Dropout ngẫu nhiên "tắt" một phần neuron trong quá trình
+                        huấn luyện để chống overfitting. Chỉ có tác dụng khi
+                        num_layers > 1 (vì dropout áp dụng giữa các tầng, không
+                        áp dụng ở tầng cuối cùng).
+        # Gọi __init__ của lớp cha nn.Module - bắt buộc để PyTorch quản lý
+        # tham số (weights, biases) và hỗ trợ .to(device), .parameters(), v.v.
+        # Lớp GRU chính: xử lý chuỗi tuần tự qua các bước thời gian.
+        # Tham số:
+        #   input_size  = input_dim  : số features đầu vào mỗi bước
+        #   hidden_size = hidden_dim : kích thước vector trạng thái ẩn
+        #   num_layers  : số tầng GRU xếp chồng (stacked GRU)
+        #   dropout     : tỷ lệ dropout giữa các tầng (0 nếu chỉ 1 tầng,
+        #                 vì PyTorch yêu cầu dropout=0 khi num_layers=1)
+        #   batch_first = True : quy ước đầu vào có shape (batch, seq, feat)
+        #                 thay vì (seq, batch, feat). Cách này trực quan hơn
+        #                 và phù hợp với cách ta tổ chức dữ liệu.
+        # FC Head (Fully Connected Head): lớp tuyến tính ánh xạ
+        # hidden state (hidden_dim chiều) -> 1 giá trị dự đoán.
+        # Ví dụ: nếu hidden_dim = 64, lớp này có:
+        #   - Ma trận trọng số W: shape (1, 64) -> 64 tham số
+        #   - Bias b: shape (1) -> 1 tham số
+        #   - Tổng: 65 tham số học được
+        # Lớp này được áp dụng RIÊNG RẼ cho từng bước thời gian nhưng
+        # dùng CÙNG trọng số (weight sharing), giúp mô hình nhất quán
+        # và giảm số tham số cần học.
+        """Lan truyền xuôi (forward pass) - tính dự đoán từ đầu vào.
+        Đây là hàm được PyTorch gọi tự động khi ta viết model(x).
+        Nó mô tả CÁCH dữ liệu chảy qua mô hình từ đầu vào đến đầu ra.
+            x: Tensor đầu vào, shape (batch_size, seq_len, input_dim).
+               Mỗi phần tử x[i, t, :] là vector features của chuỗi thứ i
+               tại bước thời gian thứ t.
+            Tensor dự đoán, shape (batch_size, seq_len).
+            Mỗi phần tử output[i, t] là giá trị co ngót dự đoán của chuỗi
+            thứ i tại bước thời gian thứ t.
+        # Bước 1: Đưa chuỗi qua GRU
+        # self.gru(x) trả về tuple gồm 2 phần:
+        #   - hidden: (batch, seq_len, hidden_dim) - trạng thái ẩn TẠI MỌI bước
+        #             Đây là "bộ nhớ ngắn hạn" chứa thông tin tích luỹ từ đầu
+        #             chuỗi đến bước hiện tại.
+        #   - _     : (num_layers, batch, hidden_dim) - trạng thái ẩn cuối cùng
+        #             của mỗi tầng GRU. Ta không cần giá trị này nên dùng _.
+        # Bước 2: Ánh xạ hidden state -> giá trị dự đoán qua FC head
+        #   Lớp Linear áp dụng phép nhân ma trận + bias cho mỗi vector hidden.
+        # .squeeze(-1): bỏ chiều cuối cùng (chiều có size=1)
+        #   Kết quả: mỗi bước thời gian có đúng 1 giá trị dự đoán.
+    """Tạo mô hình GRU từ bộ siêu tham số (hyperparameters) do Optuna đề xuất.
+    Hàm này là "cầu nối" giữa Optuna (tìm siêu tham số) và kiến trúc mô hình.
+    Mỗi khi Optuna thử một bộ tham số mới, hàm này được gọi để tạo mô hình
+    tương ứng, sau đó mô hình được huấn luyện và đánh giá.
+        input_dim: Số features đầu vào (được xác định tự động từ dữ liệu).
+        params:    Dict chứa siêu tham số do suggest_params() đề xuất.
+                   Bắt buộc có: hidden_dim, num_layers, dropout.
+        nn.Module: Một instance GRURegressor sẵn sàng huấn luyện.
+        hidden_dim=int(params["hidden_dim"]),   # Ép kiểu int vì Optuna có thể trả float
+        num_layers=int(params["num_layers"]),    # Số tầng GRU (1 hoặc 2)
+        dropout=float(params["dropout"]),        # Tỷ lệ dropout (0.05 đến 0.30)
+    """Định nghĩa không gian tìm kiếm siêu tham số (search space) cho Optuna.
+    Optuna sẽ gọi hàm này mỗi trial (lần thử) để lấy một bộ tham số mới.
+    Mỗi tham số được chọn từ một khoảng giá trị hợp lý, và Optuna sẽ dần
+    tập trung vào vùng cho kết quả tốt nhất (Bayesian optimization).
+    Không gian tìm kiếm:
+        Kích thước hidden state. Chọn từ 3 giá trị cố định thay vì dải liên tục
+        để giảm không gian tìm kiếm. 32 = nhẹ nhất, 64 = mạnh nhất.
+        Với dữ liệu co ngót (pattern không quá phức tạp), 32-64 thường đủ.
+    num_layers (int: 1 đến 2):
+        Số tầng GRU xếp chồng. 1 tầng = đơn giản, nhanh. 2 tầng = học biểu
+        diễn sâu hơn nhưng chậm hơn và dễ overfitting hơn.
+        Không thử 3+ tầng vì dữ liệu co ngót thường không đủ lớn/phức tạp.
+    dropout (float: 0.05 đến 0.30):
+        Tỷ lệ neuron bị "tắt" ngẫu nhiên khi huấn luyện. Giúp chống overfitting.
+        0.05 = regularization nhẹ, 0.30 = regularization mạnh.
+        Chỉ có tác dụng khi num_layers > 1.
+    lr (float: 1e-4 đến 3e-3, log scale):
+        Learning rate - tốc độ học. Tham số QUAN TRỌNG NHẤT ảnh hưởng đến
+        quá trình huấn luyện. Log scale vì learning rate tối ưu thường phân
+        bố theo logarit (1e-4 và 1e-3 "cách nhau" tương đương 1e-3 và 1e-2).
+    wd (float: 1e-7 đến 1e-3, log scale):
+        Weight decay - hệ số phạt L2 regularization. Ngăn trọng số quá lớn,
+        giúp mô hình tổng quát hoá tốt hơn. Log scale vì lý do tương tự lr.
+        trial: Đối tượng Optuna trial, cung cấp phương thức suggest_*
+               để chọn giá trị tham số.
+        dict: Bộ siêu tham số cho 1 lần thử nghiệm.
+    print(f"[{MODEL_NAME}] BUOC 1/3: Chuan bi du lieu dang chuoi (loc + feature engineering)")
+    print(f"[{MODEL_NAME}] BUOC 2/3: Holdout (train/val/test 1 lan theo GID, Optuna 3 trial)")
+    print(f"[{MODEL_NAME}] BUOC 3/3: Group K-Fold ({N_SPLITS} fold, Optuna {N_TRIALS_KFOLD} trial)")
