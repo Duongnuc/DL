@@ -1,0 +1,26 @@
+== basic: 47 curves, 418 readings, 27 mixes
+      curves  readings  mixes  test_share_%
+fold                                       
+0          9        82      6          19.6
+1         15       119      6          28.5
+2          5        50      5          12.0
+3         10       100      5          23.9
+4          8        67      5          16.0
+   outer fold 0: training part 21 mixes (38 curves)
+   outer fold 1: training part 21 mixes (32 curves)
+   outer fold 2: training part 22 mixes (42 curves)
+   outer fold 3: training part 22 mixes (37 curves)
+   outer fold 4: training part 22 mixes (39 curves)
+== total: 143 curves, 1371 readings, 115 mixes
+      curves  readings  mixes  test_share_%
+fold                                       
+0         28       292     23          21.3
+1         31       278     23          20.3
+2         27       270     23          19.7
+3         30       273     23          19.9
+4         27       258     23          18.8
+   outer fold 0: training part 92 mixes (115 curves)
+   outer fold 1: training part 92 mixes (112 curves)
+   outer fold 2: training part 92 mixes (116 curves)
+   outer fold 3: training part 92 mixes (113 curves)
+   outer fold 4: training part 92 mixes (116 curves)

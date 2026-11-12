@@ -1,0 +1,56 @@
+== basic: 418 readings, 47 curves, 27 mixes
+   model  train_R2  train_NRMSE  test_R2  test_NRMSE  test_RMSE  test_MAE test R2 range over folds
+B4TW-SCC      0.74        45.72     0.74       45.45      14.44     11.43                0.67-0.81
+      DT      0.85        30.05     0.34       72.48      23.03     16.49               -0.82-0.66
+      RF      0.98        12.94     0.54       61.03      19.39     14.21                0.20-0.66
+      ET      0.99         5.98     0.59       57.55      18.29     12.74                0.38-0.68
+      GB      0.98        10.05     0.61       56.00      17.79     12.86                0.36-0.82
+     XGB      0.98         9.06     0.59       57.37      18.23     13.79                0.21-0.84
+-- creep part (J minus first reading)
+   model  creep_part_R2  creep_part_NRMSE  creep_part_RMSE  creep_part_MAE
+B4TW-SCC           0.35             58.56            11.49            7.96
+      DT          -0.34             83.66            16.41           11.20
+      RF           0.46             53.32            10.46            6.44
+      ET           0.48             52.18            10.24            6.74
+      GB           0.51             50.55             9.92            6.64
+     XGB           0.51             50.69             9.94            7.07
+
+== total: 1371 readings, 143 curves, 115 mixes
+   model  train_R2  train_NRMSE  test_R2  test_NRMSE  test_RMSE  test_MAE test R2 range over folds
+B4TW-SCC      0.47        68.02     0.48       68.19      23.50     18.20                0.11-0.59
+      DT      0.84        35.64     0.53       64.32      22.17     15.86                0.29-0.68
+      RF      0.99         9.15     0.70       51.20      17.65     11.98                0.60-0.77
+      ET      1.00         4.67     0.72       49.94      17.21     11.54                0.63-0.76
+      GB      0.98        11.77     0.77       45.29      15.61     11.39                0.66-0.85
+     XGB      0.98        14.73     0.76       45.79      15.78     11.45                0.67-0.84
+-- creep part (J minus first reading)
+   model  creep_part_R2  creep_part_NRMSE  creep_part_RMSE  creep_part_MAE
+B4TW-SCC           0.45             69.53            16.05           10.84
+      DT           0.22             82.37            19.01           13.63
+      RF           0.62             57.76            13.33            8.38
+      ET           0.69             51.88            11.98            7.38
+      GB           0.67             53.38            12.32            8.22
+     XGB           0.64             56.09            12.95            8.66
+
+== test RMSE (1e-6/MPa) of model minus B4TW-SCC; 95 % interval from 2000 bootstrap draws of mixes
+             creep model  RMSE_diff_vs_B4TW  ci95_low  ci95_high  share_ML_better
+             basic    DT               8.59      4.00      12.69             0.00
+             basic    RF               4.95      1.01       8.70             0.01
+             basic    ET               3.85     -0.32       8.01             0.04
+             basic    GB               3.35     -0.16       7.07             0.03
+             basic   XGB               3.79     -0.22       8.05             0.03
+basic (creep part)    DT               4.93      1.84       7.47             0.00
+basic (creep part)    RF              -1.03     -3.19       1.81             0.78
+basic (creep part)    ET              -1.25     -3.87       1.81             0.77
+basic (creep part)    GB              -1.57     -3.93       1.32             0.85
+basic (creep part)   XGB              -1.54     -4.29       1.65             0.81
+             total    DT              -1.33     -6.48       4.64             0.70
+             total    RF              -5.86    -10.21      -1.03             0.99
+             total    ET              -6.29    -10.56      -1.83             1.00
+             total    GB              -7.89    -11.58      -4.13             1.00
+             total   XGB              -7.72    -11.35      -3.90             1.00
+total (creep part)    DT               2.96     -0.46       6.17             0.05
+total (creep part)    RF              -2.72     -5.48       0.00             0.97
+total (creep part)    ET              -4.08     -6.46      -1.82             1.00
+total (creep part)    GB              -3.73     -6.07      -1.44             1.00
+total (creep part)   XGB              -3.10     -5.69      -0.60             0.99

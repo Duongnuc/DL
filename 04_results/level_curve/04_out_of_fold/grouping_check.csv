@@ -1,0 +1,11 @@
+creep,model,R2_by_curve_not_nested,R2_by_mix_not_nested
+basic,DT,0.6,0.35
+basic,RF,0.56,0.46
+basic,ET,0.61,0.45
+basic,GB,0.67,0.56
+basic,XGB,0.65,0.44
+total,DT,0.58,0.32
+total,RF,0.74,0.51
+total,ET,0.72,0.54
+total,GB,0.78,0.48
+total,XGB,0.78,0.48

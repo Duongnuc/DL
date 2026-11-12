@@ -1,0 +1,20 @@
+creep,parameter,min,max,mean
+basic,fcm28 (MPa),26.0,97.1,62.65
+basic,w/cm,0.24,0.47,0.33
+basic,cm (kg/m3),415.0,620.0,520.02
+basic,a/cm,2.64,4.53,3.28
+basic,ca (kg/m3),665.0,1300.0,835.02
+basic,T (C),20.0,23.0,21.66
+basic,t' (days),1.0,90.0,21.38
+basic,"t - t' (days), last reading",14.0,470.0,204.24
+total,fcm28 (MPa),17.0,107.4,59.02
+total,w/cm,0.22,0.56,0.33
+total,cm (kg/m3),356.0,840.7,542.25
+total,a/cm,1.65,5.06,3.05
+total,ca (kg/m3),610.0,1300.0,800.53
+total,V/S (mm),17.65,40.54,24.04
+total,T (C),20.0,27.0,21.79
+total,RH,0.35,0.85,0.55
+total,t' (days),1.0,90.0,22.37
+total,t0 (days),1.0,90.0,14.5
+total,"t - t' (days), last reading",19.0,600.0,195.27

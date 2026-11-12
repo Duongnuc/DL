@@ -1,0 +1,18 @@
+{
+ "params": {
+  "n_estimators": 500,
+  "learning_rate": 0.3,
+  "max_depth": 4,
+  "min_child_weight": 5,
+  "subsample": 0.6,
+  "colsample_bytree": 1.0
+ },
+ "val_nrmse": 44.69675266023118,
+ "val_sd": 11.105206551403507,
+ "train_nrmse": 1.3508029765008156,
+ "default_val_nrmse": 63.80383809467063,
+ "n_readings": 323,
+ "n_curves": 37,
+ "n_mixes": 23,
+ "seconds": 87.9
+}

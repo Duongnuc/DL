@@ -1,0 +1,7 @@
+creep,panel,curve,readings,percentile,rmse_ET
+basic,a,c_014_28,6,25,5.01
+basic,b,c_083_01,12,50,9.87
+basic,c,c_006_04,8,75,16.34
+total,a,c_043_04,7,25,4.26
+total,b,c_006_02,8,50,7.97
+total,c,c_011_01,14,75,17.94

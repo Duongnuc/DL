@@ -1,0 +1,13 @@
+,Decision tree,Random forest,Extra trees,Gradient boosting,XGBoost
+n_estimators,-,100,100,100,100
+max_features,-,6,6,-,-
+max_depth,4,8,14,2,2
+max_leaf_nodes,20,None,None,None,-
+min_samples_split,2,5,2,15,-
+min_samples_leaf,3,2,1,4,-
+learning_rate,-,-,-,0.3,0.1
+subsample,-,-,-,1.0,1.0
+colsample_bytree,-,-,-,-,1.0
+min_child_weight,-,-,-,-,2
+val NRMSE default (%),79.0,67.1,63.6,66.7,69.4
+val NRMSE tuned (%),69.8,63.8,62.9,61.3,64.4

@@ -1,0 +1,85 @@
+== basic: selected on all curves (grouped 5-fold)
+                      Decision tree Random forest Extra trees Gradient boosting XGBoost
+n_estimators                      -           100         100               200     200
+max_features                      -             4           6                 -       -
+max_depth                         8            19          14                 4       2
+max_leaf_nodes                 None          None        None                 5       -
+min_samples_split                 2             2           2                 2       -
+min_samples_leaf                  1             1           1                 4       -
+learning_rate                     -             -           -               0.2    0.15
+subsample                         -             -           -               0.9     1.0
+colsample_bytree                  -             -           -                 -     1.0
+min_child_weight                  -             -           -                 -       5
+val NRMSE default (%)          56.6          59.0        53.8              55.4    62.4
+val NRMSE tuned (%)            53.2          56.4        53.2              49.3    50.9
+
+-- basic: selected in each outer training part
+model  fold  n_estimators  max_features  max_depth  max_leaf_nodes  min_samples_split  min_samples_leaf  learning_rate  subsample  colsample_bytree  min_child_weight  val_nrmse
+   DT     0           NaN           NaN          5            20.0                2.0               8.0            NaN        NaN               NaN               NaN       60.5
+   DT     1           NaN           NaN         16             NaN                2.0               1.0            NaN        NaN               NaN               NaN       67.7
+   DT     2           NaN           NaN          5            20.0                2.0              15.0            NaN        NaN               NaN               NaN       63.3
+   DT     3           NaN           NaN          3             NaN                2.0              15.0            NaN        NaN               NaN               NaN       79.4
+   DT     4           NaN           NaN          6             NaN                2.0               3.0            NaN        NaN               NaN               NaN       64.5
+   RF     0         100.0           3.0          8             NaN                2.0               1.0            NaN        NaN               NaN               NaN       46.8
+   RF     1         100.0           1.0         13             NaN                3.0               1.0            NaN        NaN               NaN               NaN       51.0
+   RF     2         100.0           2.0          7             NaN                2.0               1.0            NaN        NaN               NaN               NaN       59.0
+   RF     3         100.0           6.0          9             NaN                2.0               1.0            NaN        NaN               NaN               NaN       60.0
+   RF     4         100.0           4.0          6             NaN                2.0               1.0            NaN        NaN               NaN               NaN       61.1
+   ET     0         100.0           6.0         10             NaN                2.0               1.0            NaN        NaN               NaN               NaN       45.2
+   ET     1         100.0           3.0          9             NaN                2.0               1.0            NaN        NaN               NaN               NaN       48.4
+   ET     2         100.0           6.0          7             NaN                2.0               1.0            NaN        NaN               NaN               NaN       56.9
+   ET     3         100.0           6.0         16             NaN                2.0               1.0            NaN        NaN               NaN               NaN       64.8
+   ET     4         100.0           6.0         14             NaN                2.0               1.0            NaN        NaN               NaN               NaN       54.3
+   GB     0         200.0           NaN          2             NaN               10.0               3.0           0.10        0.8               NaN               NaN       39.5
+   GB     1         500.0           NaN          3            10.0               15.0               1.0           0.30        1.0               NaN               NaN       37.0
+   GB     2         300.0           NaN          2             NaN                2.0              15.0           0.02        1.0               NaN               NaN       45.2
+   GB     3         100.0           NaN          3             NaN               15.0               2.0           0.30        1.0               NaN               NaN       55.3
+   GB     4         500.0           NaN          3            10.0                6.0               1.0           0.10        1.0               NaN               NaN       54.3
+  XGB     0         200.0           NaN          2             NaN                NaN               NaN           0.05        0.5               0.9               3.0       41.2
+  XGB     1         500.0           NaN          4             NaN                NaN               NaN           0.30        0.6               1.0               5.0       44.7
+  XGB     2          50.0           NaN          2             NaN                NaN               NaN           0.20        0.9               0.7               3.0       45.4
+  XGB     3         200.0           NaN          5             NaN                NaN               NaN           0.10        0.7               0.9               1.0       57.1
+  XGB     4         300.0           NaN          2             NaN                NaN               NaN           0.30        0.5               1.0               3.0       50.9
+
+== total: selected on all curves (grouped 5-fold)
+                      Decision tree Random forest Extra trees Gradient boosting XGBoost
+n_estimators                      -           100         100               100     200
+max_features                      -             5           9                 -       -
+max_depth                        19            18          16                 5       4
+max_leaf_nodes                 None          None        None              None       -
+min_samples_split                 2             2           2                 2       -
+min_samples_leaf                  1             1           1                 1       -
+learning_rate                     -             -           -               0.1     0.1
+subsample                         -             -           -               1.0     1.0
+colsample_bytree                  -             -           -                 -     1.0
+min_child_weight                  -             -           -                 -      10
+val NRMSE default (%)          59.3          49.0        48.3              44.5    47.3
+val NRMSE tuned (%)            58.3          46.2        47.9              42.7    41.9
+
+-- total: selected in each outer training part
+model  fold  n_estimators  max_features  max_depth  max_leaf_nodes  min_samples_split  min_samples_leaf  learning_rate  subsample  colsample_bytree  min_child_weight  val_nrmse
+   DT     0           NaN           NaN         12             NaN                6.0               1.0            NaN        NaN               NaN               NaN       64.6
+   DT     1           NaN           NaN         19             NaN                2.0               5.0            NaN        NaN               NaN               NaN       72.0
+   DT     2           NaN           NaN          5             NaN                8.0               3.0            NaN        NaN               NaN               NaN       68.6
+   DT     3           NaN           NaN          7             NaN               15.0               6.0            NaN        NaN               NaN               NaN       63.1
+   DT     4           NaN           NaN          7            50.0                2.0              15.0            NaN        NaN               NaN               NaN       67.1
+   RF     0         100.0           2.0         20             NaN                2.0               1.0            NaN        NaN               NaN               NaN       48.8
+   RF     1         100.0           3.0         14             NaN                2.0               1.0            NaN        NaN               NaN               NaN       54.9
+   RF     2         100.0           3.0         14             NaN                2.0               1.0            NaN        NaN               NaN               NaN       58.8
+   RF     3         100.0           3.0         16             NaN                2.0               1.0            NaN        NaN               NaN               NaN       52.4
+   RF     4         100.0           6.0         14             NaN                5.0               1.0            NaN        NaN               NaN               NaN       56.5
+   ET     0         100.0           3.0         17             NaN                2.0               1.0            NaN        NaN               NaN               NaN       47.2
+   ET     1         100.0           9.0         11             NaN                2.0               1.0            NaN        NaN               NaN               NaN       57.0
+   ET     2         100.0           9.0         20             NaN                2.0               1.0            NaN        NaN               NaN               NaN       58.2
+   ET     3         100.0           9.0         16             NaN                2.0               1.0            NaN        NaN               NaN               NaN       51.9
+   ET     4         100.0           9.0         13             NaN                2.0               1.0            NaN        NaN               NaN               NaN       56.2
+   GB     0         200.0           NaN          4             5.0               20.0               1.0           0.15        1.0               NaN               NaN       47.8
+   GB     1         500.0           NaN          3             5.0                2.0               4.0           0.15        1.0               NaN               NaN       49.9
+   GB     2         500.0           NaN          4             5.0               10.0               1.0           0.10        1.0               NaN               NaN       53.3
+   GB     3         100.0           NaN          4             NaN                3.0               1.0           0.20        0.9               NaN               NaN       48.6
+   GB     4         500.0           NaN          4             5.0                8.0               1.0           0.05        1.0               NaN               NaN       49.8
+  XGB     0         300.0           NaN          4             NaN                NaN               NaN           0.10        1.0               0.6              10.0       50.2
+  XGB     1         300.0           NaN          3             NaN                NaN               NaN           0.15        0.6               1.0              10.0       50.7
+  XGB     2         200.0           NaN          2             NaN                NaN               NaN           0.30        0.9               0.6               3.0       53.5
+  XGB     3          50.0           NaN          4             NaN                NaN               NaN           0.30        1.0               1.0               3.0       51.4
+  XGB     4         300.0           NaN          2             NaN                NaN               NaN           0.30        1.0               1.0               1.0       51.7

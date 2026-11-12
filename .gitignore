@@ -1,0 +1,9 @@
+# Only data, code and results go to git; the paper text stays on this PC.
+01_paper/
+_control/
+04_results/_superseded_with_fc_above_110_2026-11-12/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+~$*

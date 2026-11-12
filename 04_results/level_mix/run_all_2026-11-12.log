@@ -1,0 +1,329 @@
+=== 02_make_folds.py
+== basic: 47 curves, 418 readings, 27 mixes
+      curves  readings  mixes  test_share_%
+fold                                       
+0          9        82      6          19.6
+1         15       119      6          28.5
+2          5        50      5          12.0
+3         10       100      5          23.9
+4          8        67      5          16.0
+   outer fold 0: training part 21 mixes (38 curves)
+   outer fold 1: training part 21 mixes (32 curves)
+   outer fold 2: training part 22 mixes (42 curves)
+   outer fold 3: training part 22 mixes (37 curves)
+   outer fold 4: training part 22 mixes (39 curves)
+== total: 143 curves, 1371 readings, 115 mixes
+      curves  readings  mixes  test_share_%
+fold                                       
+0         28       292     23          21.3
+1         31       278     23          20.3
+2         27       270     23          19.7
+3         30       273     23          19.9
+4         27       258     23          18.8
+   outer fold 0: training part 92 mixes (115 curves)
+   outer fold 1: training part 92 mixes (112 curves)
+   outer fold 2: training part 92 mixes (116 curves)
+   outer fold 3: training part 92 mixes (113 curves)
+   outer fold 4: training part 92 mixes (116 curves)
+=== 02_make_folds.py: exit 0, 23 s
+=== 03_tune.py
+basic all RF: val NRMSE 66.4 -> 64.4 %  (321 s)
+basic all ET: val NRMSE 65.7 -> 65.1 %  (301 s)
+basic all GB: val NRMSE 59.5 -> 58.0 %  (539 s)
+basic outer0 RF: val NRMSE 61.6 -> 60.3 %  (342 s)
+basic outer0 ET: val NRMSE 60.7 -> 60.0 %  (264 s)
+basic outer0 GB: val NRMSE 61.5 -> 57.0 %  (808 s)
+basic outer1 RF: val NRMSE 56.5 -> 54.8 %  (315 s)
+basic outer1 ET: val NRMSE 50.5 -> 50.0 %  (257 s)
+basic outer1 GB: val NRMSE 57.6 -> 51.2 %  (199 s)
+basic outer2 RF: val NRMSE 56.2 -> 55.4 %  (365 s)
+basic outer2 ET: val NRMSE 56.5 -> 55.7 %  (248 s)
+basic outer2 GB: val NRMSE 54.2 -> 47.2 %  (329 s)
+basic outer3 RF: val NRMSE 67.4 -> 62.5 %  (331 s)
+basic outer3 ET: val NRMSE 67.9 -> 64.0 %  (253 s)
+basic outer3 GB: val NRMSE 67.1 -> 58.4 %  (132 s)
+basic outer4 RF: val NRMSE 60.7 -> 56.4 %  (336 s)
+basic outer4 ET: val NRMSE 56.0 -> 54.2 %  (246 s)
+basic outer4 GB: val NRMSE 57.5 -> 50.3 %  (789 s)
+total all RF: val NRMSE 67.1 -> 63.8 %  (558 s)
+total all ET: val NRMSE 63.6 -> 62.9 %  (479 s)
+total all GB: val NRMSE 66.7 -> 61.3 %  (413 s)
+total outer0 RF: val NRMSE 65.0 -> 64.2 %  (610 s)
+total outer0 ET: val NRMSE 68.1 -> 66.9 %  (473 s)
+total outer0 GB: val NRMSE 63.8 -> 62.4 %  (442 s)
+total outer1 RF: val NRMSE 58.8 -> 56.2 %  (536 s)
+total outer1 ET: val NRMSE 58.8 -> 57.3 %  (421 s)
+total outer1 GB: val NRMSE 67.7 -> 56.7 %  (423 s)
+total outer2 RF: val NRMSE 74.7 -> 68.8 %  (521 s)
+total outer2 ET: val NRMSE 72.5 -> 68.5 %  (409 s)
+total outer2 GB: val NRMSE 69.1 -> 61.3 %  (875 s)
+total outer3 RF: val NRMSE 66.8 -> 63.4 %  (533 s)
+total outer3 ET: val NRMSE 66.6 -> 64.1 %  (369 s)
+total outer3 GB: val NRMSE 63.8 -> 60.6 %  (349 s)
+total outer4 RF: val NRMSE 68.3 -> 67.1 %  (518 s)
+total outer4 ET: val NRMSE 73.5 -> 71.4 %  (374 s)
+total outer4 GB: val NRMSE 73.7 -> 66.4 %  (279 s)
+basic all DT: val NRMSE 77.3 -> 70.2 %  (5 s)
+basic all XGB: val NRMSE 70.1 -> 63.0 %  (65 s)
+basic outer0 DT: val NRMSE 67.4 -> 62.2 %  (2 s)
+basic outer0 XGB: val NRMSE 67.6 -> 60.3 %  (144 s)
+basic outer1 DT: val NRMSE 61.4 -> 59.3 %  (4 s)
+basic outer1 XGB: val NRMSE 52.3 -> 43.6 %  (50 s)
+basic outer2 DT: val NRMSE 69.5 -> 61.3 %  (5 s)
+basic outer2 XGB: val NRMSE 61.0 -> 56.4 %  (84 s)
+basic outer3 DT: val NRMSE 90.1 -> 75.0 %  (2 s)
+basic outer3 XGB: val NRMSE 71.6 -> 59.3 %  (162 s)
+basic outer4 DT: val NRMSE 80.0 -> 77.5 %  (2 s)
+basic outer4 XGB: val NRMSE 72.6 -> 51.6 %  (159 s)
+total all DT: val NRMSE 79.0 -> 69.8 %  (4 s)
+total all XGB: val NRMSE 69.4 -> 64.4 %  (164 s)
+total outer0 DT: val NRMSE 71.4 -> 67.7 %  (5 s)
+total outer0 XGB: val NRMSE 68.4 -> 61.2 %  (103 s)
+total outer1 DT: val NRMSE 71.9 -> 66.2 %  (4 s)
+total outer1 XGB: val NRMSE 63.8 -> 57.0 %  (256 s)
+total outer2 DT: val NRMSE 93.8 -> 75.5 %  (4 s)
+total outer2 XGB: val NRMSE 79.0 -> 60.7 %  (112 s)
+total outer3 DT: val NRMSE 77.3 -> 72.1 %  (7 s)
+total outer3 XGB: val NRMSE 64.2 -> 55.6 %  (127 s)
+total outer4 DT: val NRMSE 83.3 -> 75.1 %  (7 s)
+total outer4 XGB: val NRMSE 71.6 -> 66.1 %  (117 s)
+=== 03_tune.py: exit 0, 2470 s
+=== 04_tuning_outputs.py
+== basic: selected on all curves (grouped 5-fold)
+                      Decision tree Random forest Extra trees Gradient boosting XGBoost
+n_estimators                      -           100         100               500     100
+max_features                      -             5           6                 -       -
+max_depth                         8             4          15                 3       3
+max_leaf_nodes                 None          None        None              None       -
+min_samples_split                 2             2           2                 2       -
+min_samples_leaf                  1             1           1                 4       -
+learning_rate                     -             -           -               0.1    0.02
+subsample                         -             -           -               1.0     1.0
+colsample_bytree                  -             -           -                 -     1.0
+min_child_weight                  -             -           -                 -      10
+val NRMSE default (%)          77.3          66.4        65.7              59.5    70.1
+val NRMSE tuned (%)            70.2          64.4        65.1              58.0    63.0
+
+-- basic: selected in each outer training part
+model  fold  n_estimators  max_features  max_depth  max_leaf_nodes  min_samples_split  min_samples_leaf  learning_rate  subsample  colsample_bytree  min_child_weight  val_nrmse
+   DT     0           NaN           NaN       10.0             NaN                2.0               1.0            NaN        NaN               NaN               NaN       62.2
+   DT     1           NaN           NaN        9.0             NaN                2.0               1.0            NaN        NaN               NaN               NaN       59.3
+   DT     2           NaN           NaN        9.0             NaN                2.0               1.0            NaN        NaN               NaN               NaN       61.3
+   DT     3           NaN           NaN        6.0             NaN                2.0              20.0            NaN        NaN               NaN               NaN       75.0
+   DT     4           NaN           NaN        3.0             NaN               20.0               1.0            NaN        NaN               NaN               NaN       77.5
+   RF     0         100.0           5.0       14.0            70.0                6.0               1.0            NaN        NaN               NaN               NaN       60.3
+   RF     1         100.0           6.0        4.0             NaN                5.0               1.0            NaN        NaN               NaN               NaN       54.8
+   RF     2         100.0           6.0        8.0             NaN                2.0               1.0            NaN        NaN               NaN               NaN       55.4
+   RF     3         100.0           2.0        5.0             NaN                5.0               2.0            NaN        NaN               NaN               NaN       62.5
+   RF     4         100.0           3.0        8.0             NaN               10.0               1.0            NaN        NaN               NaN               NaN       56.4
+   ET     0         100.0           6.0       12.0             NaN                3.0               1.0            NaN        NaN               NaN               NaN       60.0
+   ET     1         100.0           6.0       14.0             NaN                2.0               1.0            NaN        NaN               NaN               NaN       50.0
+   ET     2         100.0           4.0        NaN             NaN                3.0               1.0            NaN        NaN               NaN               NaN       55.7
+   ET     3         100.0           4.0        9.0             NaN                6.0               1.0            NaN        NaN               NaN               NaN       64.0
+   ET     4         100.0           1.0       13.0           200.0                2.0               1.0            NaN        NaN               NaN               NaN       54.2
+   GB     0         500.0           NaN        6.0             NaN                2.0               1.0           0.20        1.0               NaN               NaN       57.0
+   GB     1         200.0           NaN        4.0             NaN                2.0              15.0           0.15        1.0               NaN               NaN       51.2
+   GB     2         100.0           NaN        4.0             NaN                2.0               1.0           0.20        0.7               NaN               NaN       47.2
+   GB     3          50.0           NaN       14.0            70.0               10.0               1.0           0.15        0.6               NaN               NaN       58.4
+   GB     4         500.0           NaN        2.0             NaN                2.0               4.0           0.20        1.0               NaN               NaN       50.3
+  XGB     0         500.0           NaN        2.0             NaN                NaN               NaN           0.30        1.0               1.0               2.0       60.3
+  XGB     1          50.0           NaN        2.0             NaN                NaN               NaN           0.30        1.0               1.0               3.0       43.6
+  XGB     2         200.0           NaN        2.0             NaN                NaN               NaN           0.30        0.9               0.4               1.0       56.4
+  XGB     3         500.0           NaN        1.0             NaN                NaN               NaN           0.01        0.6               0.5               5.0       59.3
+  XGB     4         500.0           NaN        2.0             NaN                NaN               NaN           0.30        1.0               1.0               5.0       51.6
+
+== total: selected on all curves (grouped 5-fold)
+                      Decision tree Random forest Extra trees Gradient boosting XGBoost
+n_estimators                      -           100         100               100     100
+max_features                      -             6           6                 -       -
+max_depth                         4             8          14                 2       2
+max_leaf_nodes                   20          None        None              None       -
+min_samples_split                 2             5           2                15       -
+min_samples_leaf                  3             2           1                 4       -
+learning_rate                     -             -           -               0.3     0.1
+subsample                         -             -           -               1.0     1.0
+colsample_bytree                  -             -           -                 -     1.0
+min_child_weight                  -             -           -                 -       2
+val NRMSE default (%)          79.0          67.1        63.6              66.7    69.4
+val NRMSE tuned (%)            69.8          63.8        62.9              61.3    64.4
+
+-- total: selected in each outer training part
+model  fold  n_estimators  max_features  max_depth  max_leaf_nodes  min_samples_split  min_samples_leaf  learning_rate  subsample  colsample_bytree  min_child_weight  val_nrmse
+   DT     0           NaN           NaN         12             NaN                2.0               1.0            NaN        NaN               NaN               NaN       67.7
+   DT     1           NaN           NaN          5             NaN                8.0               3.0            NaN        NaN               NaN               NaN       66.2
+   DT     2           NaN           NaN          4             NaN                2.0               8.0            NaN        NaN               NaN               NaN       75.5
+   DT     3           NaN           NaN         11             NaN                2.0              20.0            NaN        NaN               NaN               NaN       72.1
+   DT     4           NaN           NaN         15             NaN                2.0               1.0            NaN        NaN               NaN               NaN       75.1
+   RF     0         100.0           7.0         13             NaN                4.0               1.0            NaN        NaN               NaN               NaN       64.2
+   RF     1         100.0           5.0         12           200.0                2.0               1.0            NaN        NaN               NaN               NaN       56.2
+   RF     2         100.0           5.0         16             NaN                3.0               1.0            NaN        NaN               NaN               NaN       68.8
+   RF     3         100.0           5.0         17             NaN                2.0               1.0            NaN        NaN               NaN               NaN       63.4
+   RF     4         100.0           9.0         12             NaN               15.0               1.0            NaN        NaN               NaN               NaN       67.1
+   ET     0         100.0           9.0         17             NaN                4.0               1.0            NaN        NaN               NaN               NaN       66.9
+   ET     1         100.0           9.0         12             NaN                2.0               1.0            NaN        NaN               NaN               NaN       57.3
+   ET     2         100.0           6.0         17             NaN                2.0               1.0            NaN        NaN               NaN               NaN       68.5
+   ET     3         100.0           5.0         11             NaN                2.0               1.0            NaN        NaN               NaN               NaN       64.1
+   ET     4         100.0           9.0         11             NaN                4.0               1.0            NaN        NaN               NaN               NaN       71.4
+   GB     0         100.0           NaN          3             NaN                2.0              10.0           0.30        1.0               NaN               NaN       62.4
+   GB     1         100.0           NaN          7             NaN                2.0               1.0           0.05        1.0               NaN               NaN       56.7
+   GB     2         500.0           NaN          3             NaN                4.0              15.0           0.20        0.9               NaN               NaN       61.3
+   GB     3         100.0           NaN          2             NaN               20.0               6.0           0.20        1.0               NaN               NaN       60.6
+   GB     4          50.0           NaN          4             5.0                2.0               1.0           0.10        1.0               NaN               NaN       66.4
+  XGB     0          50.0           NaN          3             NaN                NaN               NaN           0.30        1.0               1.0               5.0       61.2
+  XGB     1         100.0           NaN          9             NaN                NaN               NaN           0.05        0.5               1.0               1.0       57.0
+  XGB     2         200.0           NaN          3             NaN                NaN               NaN           0.20        0.6               1.0               7.0       60.7
+  XGB     3         300.0           NaN          3             NaN                NaN               NaN           0.30        1.0               0.8               5.0       55.6
+  XGB     4          50.0           NaN          5             NaN                NaN               NaN           0.30        0.9               1.0               1.0       66.1
+
+=== 04_tuning_outputs.py: exit 0, 13 s
+=== 05_random_search_check.py
+creep model  sequential  random_60  default  random_minus_sequential
+basic    DT        70.2       69.3     77.3                     -0.9
+basic    RF        64.4       66.9     66.4                      2.5
+basic    ET        65.1       67.2     65.7                      2.1
+basic    GB        58.0       59.6     59.5                      1.6
+basic   XGB        63.0       65.5     70.1                      2.5
+total    DT        69.8       70.5     79.0                      0.7
+total    RF        63.8       64.3     67.1                      0.5
+total    ET        62.9       63.9     63.6                      1.0
+total    GB        61.3       63.2     66.7                      1.9
+total   XGB        64.4       62.3     69.4                     -2.1
+=== 05_random_search_check.py: exit 0, 379 s
+=== 06_out_of_fold.py
+== basic: 418 readings, 47 curves, 27 mixes
+   model  train_R2  train_NRMSE  test_R2  test_NRMSE  test_RMSE  test_MAE test R2 range over folds
+B4TW-SCC      0.74        46.29     0.74       45.45      14.44     11.43               -0.04-0.83
+      DT      0.88        22.39     0.33       73.28      23.28     17.03               -0.20-0.82
+      RF      0.95        18.31     0.48       64.69      20.56     14.01               -0.20-0.75
+      ET      0.99         6.18     0.44       67.01      21.29     14.79               -0.03-0.69
+      GB      1.00         4.58     0.52       62.20      19.76     13.07               -0.16-0.78
+     XGB      0.94        17.18     0.41       68.62      21.80     15.93               -0.23-0.55
+-- creep part (J minus first reading)
+   model  creep_part_R2  creep_part_NRMSE  creep_part_RMSE  creep_part_MAE
+B4TW-SCC           0.35             58.56            11.49            7.96
+      DT          -0.00             72.50            14.23           10.79
+      RF           0.15             66.73            13.09            8.94
+      ET           0.33             59.18            11.61            7.42
+      GB           0.55             48.42             9.50            5.98
+     XGB           0.40             56.10            11.01            7.17
+
+== total: 1371 readings, 143 curves, 115 mixes
+   model  train_R2  train_NRMSE  test_R2  test_NRMSE  test_RMSE  test_MAE test R2 range over folds
+B4TW-SCC      0.47        68.57     0.48       68.19      23.50     18.20                0.15-0.65
+      DT      0.83        32.98     0.34       76.77      26.46     18.83                0.11-0.48
+      RF      0.98        13.22     0.49       67.31      23.20     15.95                0.16-0.70
+      ET      0.99         8.63     0.52       64.95      22.39     15.30                0.31-0.77
+      GB      0.95        19.29     0.54       64.14      22.11     15.64                0.20-0.69
+     XGB      0.98        11.32     0.44       70.61      24.34     17.38                0.13-0.61
+-- creep part (J minus first reading)
+   model  creep_part_R2  creep_part_NRMSE  creep_part_RMSE  creep_part_MAE
+B4TW-SCC           0.45             69.53            16.05           10.84
+      DT          -0.07             96.55            22.29           14.92
+      RF           0.44             70.02            16.16           10.14
+      ET           0.55             62.64            14.46            9.20
+      GB           0.51             65.46            15.11           10.45
+     XGB           0.46             68.78            15.88           10.30
+
+== test RMSE (1e-6/MPa) of model minus B4TW-SCC; 95 % interval from 2000 bootstrap draws of mixes
+             creep model  RMSE_diff_vs_B4TW  ci95_low  ci95_high  share_ML_better
+             basic    DT               8.84      3.71      13.91             0.00
+             basic    RF               6.12      1.02      10.43             0.01
+             basic    ET               6.85      2.55       9.90             0.00
+             basic    GB               5.32      0.11       9.36             0.02
+             basic   XGB               7.36      3.24      10.88             0.00
+basic (creep part)    DT               2.74     -0.17       5.77             0.03
+basic (creep part)    RF               1.60     -0.69       4.37             0.11
+basic (creep part)    ET               0.12     -2.80       3.63             0.49
+basic (creep part)    GB              -1.99     -4.14       0.77             0.92
+basic (creep part)   XGB              -0.48     -5.01       4.01             0.59
+             total    DT               2.96     -0.60       6.94             0.06
+             total    RF              -0.30     -4.71       4.16             0.60
+             total    ET              -1.12     -5.38       3.45             0.72
+             total    GB              -1.40     -5.28       3.27             0.75
+             total   XGB               0.83     -3.20       4.84             0.37
+total (creep part)    DT               6.24      2.47      10.06             0.00
+total (creep part)    RF               0.11     -3.50       3.73             0.51
+total (creep part)    ET              -1.59     -4.33       1.17             0.88
+total (creep part)    GB              -0.94     -3.26       1.56             0.78
+total (creep part)   XGB              -0.17     -3.31       2.99             0.57
+=== 06_out_of_fold.py: exit 0, 52 s
+=== 07_shap.py
+== basic: relative mean |SHAP| on test curves (max = 100)
+         DT     RF     ET     GB    XGB  mean rank
+t'    100.0  100.0  100.0  100.0  100.0        1.0
+dt     50.1   45.1   66.3   58.9   55.3        2.8
+fc28   50.0   46.1   57.4   58.1   65.1        3.0
+w/cm   40.1   56.6   46.9   52.6   75.4        3.2
+cm      3.5    9.6   17.4   11.0   14.7        5.2
+T       3.4    5.2   20.9    5.7    1.4        5.8
+
+== total: relative mean |SHAP| on test curves (max = 100)
+            DT     RF     ET     GB    XGB  mean rank
+dt       100.0  100.0  100.0  100.0  100.0        1.0
+fc28      90.7   81.6   81.3   91.6   95.4        2.0
+t'        80.2   77.0   51.6   82.2   80.2        3.4
+w/cm      85.1   58.3   26.8   52.7   50.7        4.0
+t0        14.4   25.9   59.4   16.5   21.6        4.8
+cm        10.1   14.2   15.7   19.8   20.0        6.4
+V/S       10.5   11.3   16.4   11.7   10.7        7.4
+T         14.2    8.9   14.3    9.7   10.9        7.8
+RH_test    6.6    8.2   12.8   12.6   14.8        8.2
+
+== direction check (Spearman, input vs its SHAP value)
+creep model  w/cm    cm  fc28     T    t'   dt   V/S  RH_test    t0
+basic    DT  0.57  0.58 -0.68  0.02 -0.74 0.87   NaN      NaN   NaN
+basic    RF  0.85 -0.18 -0.77  0.47 -0.79 0.97   NaN      NaN   NaN
+basic    ET  0.92 -0.26 -0.87 -0.36 -0.86 0.98   NaN      NaN   NaN
+basic    GB  0.79  0.24 -0.81  0.18 -0.85 0.99   NaN      NaN   NaN
+basic   XGB  0.82  0.40 -0.85 -0.16 -0.86 0.96   NaN      NaN   NaN
+total    DT  0.64 -0.29 -0.81 -0.71 -0.65 0.89  0.22    -0.45 -0.67
+total    RF  0.80 -0.29 -0.88 -0.42 -0.85 0.97  0.44    -0.54 -0.83
+total    ET  0.87 -0.52 -0.86  0.03 -0.86 0.98  0.42    -0.60 -0.89
+total    GB  0.67 -0.09 -0.84 -0.33 -0.86 0.97 -0.02    -0.26 -0.76
+total   XGB  0.62 -0.12 -0.82 -0.54 -0.87 0.97  0.32    -0.11 -0.78
+=== 07_shap.py: exit 0, 126 s
+=== 10_grouping_check.py
+creep model  R2_by_curve_not_nested  R2_by_mix_not_nested
+basic    DT                    0.60                  0.35
+basic    RF                    0.44                  0.48
+basic    ET                    0.59                  0.47
+basic    GB                    0.59                  0.57
+basic   XGB                    0.47                  0.50
+total    DT                    0.43                  0.43
+total    RF                    0.70                  0.52
+total    ET                    0.72                  0.53
+total    GB                    0.74                  0.59
+total   XGB                    0.71                  0.53
+=== 10_grouping_check.py: exit 0, 44 s
+=== 08_figures.py
+creep                   parameter    min     max   mean
+basic                 fcm28 (MPa)  26.00   97.10  62.65
+basic                        w/cm   0.24    0.47   0.33
+basic                  cm (kg/m3) 415.00  620.00 520.02
+basic                        a/cm   2.64    4.53   3.28
+basic                  ca (kg/m3) 665.00 1300.00 835.02
+basic                       T (C)  20.00   23.00  21.66
+basic                   t' (days)   1.00   90.00  21.38
+basic t - t' (days), last reading  14.00  470.00 204.24
+total                 fcm28 (MPa)  17.00  107.40  59.02
+total                        w/cm   0.22    0.56   0.33
+total                  cm (kg/m3) 356.00  840.70 542.25
+total                        a/cm   1.65    5.06   3.05
+total                  ca (kg/m3) 610.00 1300.00 800.53
+total                    V/S (mm)  17.65   40.54  24.04
+total                       T (C)  20.00   27.00  21.79
+total                          RH   0.35    0.85   0.55
+total                   t' (days)   1.00   90.00  22.37
+total                   t0 (days)   1.00   90.00  14.50
+total t - t' (days), last reading  19.00  600.00 195.27
+creep panel    curve  readings  percentile  rmse_ET
+basic     a c_104_05        20          25     4.58
+basic     b c_079_03        10          50    14.68
+basic     c c_082_08         9          75    19.26
+total     a c_094_01        13          25     5.28
+total     b c_072_01         9          50    11.40
+total     c c_082_17         9          75    22.53
+=== 08_figures.py: exit 0, 35 s
+=== 09_fig01_process.py
+=== 09_fig01_process.py: exit 0, 7 s
+ALL DONE

@@ -1,0 +1,21 @@
+creep,model,RMSE_diff_vs_B4TW,ci95_low,ci95_high,share_ML_better
+basic,DT,8.844,3.712,13.909,0.0
+basic,RF,6.116,1.02,10.427,0.014
+basic,ET,6.851,2.553,9.895,0.002
+basic,GB,5.324,0.115,9.355,0.022
+basic,XGB,7.363,3.239,10.883,0.001
+basic (creep part),DT,2.737,-0.169,5.768,0.032
+basic (creep part),RF,1.604,-0.692,4.365,0.107
+basic (creep part),ET,0.123,-2.802,3.628,0.494
+basic (creep part),GB,-1.989,-4.139,0.768,0.922
+basic (creep part),XGB,-0.481,-5.014,4.008,0.591
+total,DT,2.955,-0.601,6.938,0.058
+total,RF,-0.304,-4.711,4.165,0.604
+total,ET,-1.117,-5.382,3.454,0.716
+total,GB,-1.396,-5.277,3.274,0.752
+total,XGB,0.832,-3.198,4.84,0.374
+total (creep part),DT,6.237,2.468,10.06,0.0
+total (creep part),RF,0.113,-3.498,3.734,0.507
+total (creep part),ET,-1.59,-4.333,1.167,0.88
+total (creep part),GB,-0.941,-3.259,1.564,0.78
+total (creep part),XGB,-0.172,-3.307,2.99,0.566

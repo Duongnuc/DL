@@ -1,0 +1,16 @@
+{
+ "params": {
+  "max_depth": 16,
+  "max_leaf_nodes": null,
+  "min_samples_split": 2,
+  "min_samples_leaf": 1
+ },
+ "val_nrmse": 67.684103346086,
+ "val_sd": 23.4328757114157,
+ "train_nrmse": 0.004766751494004721,
+ "default_val_nrmse": 67.684103346086,
+ "n_readings": 323,
+ "n_curves": 37,
+ "n_mixes": 23,
+ "seconds": 1.6
+}
