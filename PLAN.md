@@ -177,3 +177,54 @@ first reading, explains where ML loses). Run: `99_run_all.py`, log `04_results/r
   "mixes already in the database"). Rebuild: 18 pages, 5,765 words, check_numbers exit 0.
 - Owner asked for wider but simple analyses (e.g. more seeds), backed by papers/books: research running; plan to be
   approved before any run. One nested run of 03_tune.py takes ~25 min (both creep types).
+
+### Robustness analyses 2026-11-13 (owner: "Chạy cả 3", run on the owner's Mac; results "Duyệt theo đề xuất")
+- `03_code/14_robustness.py` run on the Mac (commit 82b3da8, branch robustness-2026-11-13 of the private repo
+  Duongnuc/DL): 10 seeds at both levels, random split of readings, monotonicity check. Outputs in
+  `04_results/level_<L>/07_robustness/`. Recomputed from the prediction files: 240/240 rows match.
+- Seed 2 on the Mac picked other tuned values in 30/50 jobs (curve level); on Windows the same script reproduces
+  the paper values (3 DT jobs checked), so the difference is the machine. Seed-2 test R² differ by 0.00-0.05;
+  19/20 paper R² lie inside the 10-seed min-max. Owner: use the Mac run as is.
+- Conclusions hold in every seed: total creep, 4 ensembles lower RMSE than B4TW-SCC 10/10; basic creep, B4TW-SCC
+  better 10/10; new mixes, ensembles mean R² 0.47-0.50 vs 0.475.
+- Paper: 3.1 sentence on seeds 1-10 [Bouckaert & Frank 2004; Bouthillier et al. 2021]; 4.3 two sentences (10 seeds,
+  mean R² 0.68-0.74; random split R² 0.95-0.98 as in [nguyen_jscbm]), numbers read from the CSV with asserts.
+  To stay at 18 pages: reference spacing 2 → 1 pt; last sentence of 4.4 (repeat of its first sentence) cut (approved by the owner 2026-11-13),
+  Monotonicity result kept out of the paper (owner), kept for the response to reviewers:
+  predicted J drops > 0.5 % on 45-90 % of total-creep test curves for the ensembles, 0 % for B4TW-SCC.
+- Rebuild: 18 pages, 5,876 words, check_numbers exit 0; pages 5, 13, 15, 16, 18 viewed.
+
+### Blind read 2, 2026-11-13 (owner: "Duyệt theo đề xuất")
+- Fresh Opus reviewer on the 18-page PDF: major revision; big objections as in blind read 1. Verification table:
+  `_control/language_check_2026-11-12/BLIND_READ_2026-11-13b.md`.
+- Applied: Fig 8(b) and Fig 11 growth/start-level clauses cut (data: ensembles rise 11.7-17.2 vs measured 28.9;
+  model spread grows 44 → 94); conclusion (4) "lose accuracy mainly at the start level" cut (4.2 keeps "appear");
+  seed sentence "B4TW-SCC had a lower RMSE than every algorithm for basic creep" (assert over all five, 10 seeds);
+  "differ only in the age at loading and, for total creep, the age at the start of drying"; "RH between 0.45 and
+  0.65"; Tables 2-3 note "-: not tuned"; "random forest and extra trees average many randomised trees, and
+  gradient boosting and XGBoost add trees by boosting". Seed 2 vs 10-seed mean: kept as is (owner).
+- LanguageTool: no new grammar issue; overlap: longest run 10 words (name lists, table headers).
+- Rebuild: 18 pages, 5,832 words, check_numbers exit 0; changed pages 3, 6, 8, 9, 10, 12, 13, 14, 16 viewed.
+
+### Abstract and introduction rewrite 2026-11-13 (owner: "Duyệt theo đề xuất")
+- Checked against the abstract move sequence (sciwrite), the JOMC template ("limitation of previous research works",
+  "main results obtained") and the advisor's shrinkage abstract.
+- Abstract (239 → 277 words): opens with the gap (adapted models still inaccurate; earlier R² 0.95 with readings
+  of one curve in training and test); adds ten seeds and random split (ensembles 0.95-0.98, read from
+  07_robustness). Intro: "models adapted to SCC have therefore been proposed ... One of them"; "For the creep of
+  SCC, such studies are few."; closing sentence "The results show where tree-based algorithms can replace a
+  calibrated creep model for SCC and where they cannot."
+- No 8-word overlap with the advisor's shrinkage papers except the list of algorithm names; LanguageTool clean.
+- Rebuild: 18 pages, 5,894 words, check_numbers exit 0; pages 1-3 viewed.
+
+### Package for the advisor 2026-11-13 (owner: "làm lại báo cáo, folder code tương tự để gửi kèm")
+- `E:\05deep L\02_Creep_SCC_ML\creep_SCC_JOMC_V2_2026-11-13\` built by `01_paper/build_package.py` (readmes in
+  `01_paper/package_readmes/`): 00_READ_FIRST (docx, pdf), 01_paper_and_report (paper, report_v2 3 pages),
+  02_data (data only), 03_code (scripts, advisor's original B4TW-SCC code, requirements, README), 04_results.
+- Report numbers read from the result files; five questions for the advisor (novelty vs [6], B4TW-SCC calibration
+  curves, a/cm and admixture inputs, publication split, public data and code) and the monotonicity note.
+- Checks: `14_robustness.py smoke` run inside the package ("smoke ok", folds match); 04_results identical to the
+  source; report and READ_FIRST pages viewed.
+- Short version (owner: "bản rút gọn", chose quick code): `03_code/15_quick_check.py` refits from the saved
+  outer-fold hyperparameters and prints Tables 4-6 next to the saved values; both levels in ~17 s, 24/24 rows match
+  (in the source and inside the package). Added to the package, README and READ_FIRST.
