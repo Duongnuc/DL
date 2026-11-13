@@ -1,0 +1,13 @@
+{
+ "params": {
+  "n_estimators": 100,
+  "max_depth": null,
+  "max_features": 6,
+  "max_leaf_nodes": null,
+  "min_samples_split": 3,
+  "min_samples_leaf": 1
+ },
+ "seed": 5,
+ "group": "mix",
+ "seconds": 49.3
+}

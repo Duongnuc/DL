@@ -1,0 +1,52 @@
+== curve level: test curves whose predicted J drops by > 0.5 % on a 60-point duration grid
+                curves  decreasing  median_max_drop_pct  share_%
+creep model                                                     
+basic B4TW-SCC      47           0                 0.00      0.0
+      DT            47           6                -0.00     12.8
+      ET            47          15                 0.18     31.9
+      GB            47          36                 4.18     76.6
+      RF            47          25                 0.60     53.2
+      XGB           47          29                 1.59     61.7
+total B4TW-SCC     143           0                 0.00      0.0
+      DT           143          21                -0.00     14.7
+      ET           143          64                 0.42     44.8
+      GB           143         109                 2.34     76.2
+      RF           143         115                 0.95     80.4
+      XGB          143         129                 2.56     90.2
+(3 s)
+
+== random split of readings vs the paper split (test R2, NRMSE %)
+                             test_NRMSE                                     test_R2                   
+split          grouped by curve (paper) readings at random grouped by curve (paper) readings at random
+creep model                                                                                           
+basic B4TW-SCC                    45.45              45.45                     0.74               0.74
+      DT                          72.48              23.38                     0.34               0.93
+      ET                          57.55              16.32                     0.59               0.97
+      GB                          56.00              15.82                     0.61               0.97
+      RF                          61.03              19.62                     0.54               0.95
+      XGB                         57.37              16.37                     0.59               0.97
+total B4TW-SCC                    68.19              68.19                     0.48               0.48
+      DT                          64.32              30.20                     0.53               0.90
+      ET                          49.94              18.17                     0.72               0.96
+      GB                          45.29              13.52                     0.77               0.98
+      RF                          51.20              21.88                     0.70               0.95
+      XGB                         45.79              13.72                     0.76               0.98
+(382 s)
+
+== curve level, seeds [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]: test scores over seeds
+                R2_mean  R2_min  R2_max  NRMSE_mean  NRMSE_min  NRMSE_max  seeds_better_than_B4TW  n_seeds
+creep model                                                                                               
+basic B4TW-SCC    0.742   0.742   0.742      45.445     45.445     45.445                       0       10
+      DT          0.411   0.296   0.596      68.521     56.934     75.131                       0       10
+      ET          0.621   0.561   0.683      55.049     50.429     59.324                       0       10
+      GB          0.626   0.411   0.729      54.446     46.584     68.713                       0       10
+      RF          0.569   0.504   0.625      58.700     54.828     63.058                       0       10
+      XGB         0.644   0.584   0.699      53.327     49.100     57.728                       0       10
+total B4TW-SCC    0.475   0.475   0.475      68.193     68.193     68.193                       0       10
+      DT          0.451   0.353   0.538      69.665     63.969     75.748                       4       10
+      ET          0.688   0.597   0.727      52.531     49.151     59.799                      10       10
+      GB          0.745   0.696   0.788      47.505     43.338     51.950                      10       10
+      RF          0.684   0.616   0.713      52.900     50.398     58.375                      10       10
+      XGB         0.729   0.663   0.763      48.980     45.842     54.649                      10       10
+(2482 s)
+

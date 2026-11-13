@@ -1,0 +1,11 @@
+{
+ "params": {
+  "max_depth": 3,
+  "max_leaf_nodes": null,
+  "min_samples_split": 20,
+  "min_samples_leaf": 1
+ },
+ "seed": 2,
+ "group": "mix",
+ "seconds": 0.3
+}

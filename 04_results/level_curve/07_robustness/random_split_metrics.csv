@@ -1,0 +1,25 @@
+split,creep,seed,model,test_R2,test_NRMSE,test_RMSE,test_MAE,RMSE_minus_B4TW
+readings at random,basic,2,B4TW-SCC,0.7424,45.4453,14.4404,11.4344,0.0
+readings at random,basic,2,DT,0.9318,23.3839,7.4303,4.2251,-7.0101
+readings at random,basic,2,RF,0.952,19.6229,6.2353,3.3406,-8.2051
+readings at random,basic,2,ET,0.9668,16.3208,5.186,2.3201,-9.2544
+readings at random,basic,2,GB,0.9688,15.8217,5.0274,2.6421,-9.413
+readings at random,basic,2,XGB,0.9666,16.3725,5.2024,2.8583,-9.238
+grouped by curve (paper),basic,2,B4TW-SCC,0.7424,45.4453,14.4404,11.4344,0.0
+grouped by curve (paper),basic,2,DT,0.3446,72.4832,23.0318,16.4853,8.5914
+grouped by curve (paper),basic,2,RF,0.5353,61.0317,19.393,14.2077,4.9526
+grouped by curve (paper),basic,2,ET,0.5868,57.5508,18.287,12.7359,3.8466
+grouped by curve (paper),basic,2,GB,0.6088,55.9974,17.7934,12.8597,3.353
+grouped by curve (paper),basic,2,XGB,0.5895,57.3651,18.228,13.7853,3.7876
+readings at random,total,2,B4TW-SCC,0.4754,68.1926,23.505,18.1964,0.0
+readings at random,total,2,DT,0.8971,30.1984,10.4089,5.9073,-13.096
+readings at random,total,2,RF,0.946,21.8773,7.5408,4.5849,-15.9642
+readings at random,total,2,ET,0.9628,18.1656,6.2614,3.6104,-17.2436
+readings at random,total,2,GB,0.9794,13.5234,4.6613,2.8856,-18.8437
+readings at random,total,2,XGB,0.9788,13.7235,4.7303,2.9226,-18.7747
+grouped by curve (paper),total,2,B4TW-SCC,0.4754,68.1926,23.505,18.1964,0.0
+grouped by curve (paper),total,2,DT,0.5333,64.32,22.1701,15.8646,-1.3348
+grouped by curve (paper),total,2,RF,0.7043,51.1966,17.6467,11.9795,-5.8583
+grouped by curve (paper),total,2,ET,0.7187,49.9406,17.2138,11.5405,-6.2912
+grouped by curve (paper),total,2,GB,0.7686,45.2933,15.6119,11.3853,-7.8931
+grouped by curve (paper),total,2,XGB,0.7635,45.7859,15.7817,11.4519,-7.7233

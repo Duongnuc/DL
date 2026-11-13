@@ -1,0 +1,13 @@
+{
+ "params": {
+  "n_estimators": 50,
+  "learning_rate": 0.05,
+  "max_depth": 18,
+  "min_child_weight": 2,
+  "subsample": 1.0,
+  "colsample_bytree": 0.8
+ },
+ "seed": 3,
+ "group": "mix",
+ "seconds": 31.0
+}

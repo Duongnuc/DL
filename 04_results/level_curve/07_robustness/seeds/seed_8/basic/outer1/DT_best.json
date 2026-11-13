@@ -1,0 +1,11 @@
+{
+ "params": {
+  "max_depth": 4,
+  "max_leaf_nodes": 10,
+  "min_samples_split": 5,
+  "min_samples_leaf": 6
+ },
+ "seed": 8,
+ "group": "curve",
+ "seconds": 0.4
+}

@@ -1,0 +1,13 @@
+{
+ "params": {
+  "n_estimators": 500,
+  "learning_rate": 0.3,
+  "max_depth": 2,
+  "min_child_weight": 2,
+  "subsample": 1.0,
+  "colsample_bytree": 0.5
+ },
+ "seed": 7,
+ "group": "curve",
+ "seconds": 22.2
+}

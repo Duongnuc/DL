@@ -1,0 +1,2 @@
+seed 2 basic: WARNING: differs from the paper predictions (max abs difference 5.13e+01)
+seed 2 total: WARNING: differs from the paper predictions (max abs difference 7.31e+01)

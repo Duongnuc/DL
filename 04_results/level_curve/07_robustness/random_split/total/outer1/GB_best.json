@@ -1,0 +1,14 @@
+{
+ "params": {
+  "n_estimators": 500,
+  "learning_rate": 0.05,
+  "max_depth": 10,
+  "max_leaf_nodes": 30,
+  "min_samples_split": 3,
+  "min_samples_leaf": 1,
+  "subsample": 0.5
+ },
+ "seed": 2,
+ "group": "none",
+ "seconds": 286.7
+}

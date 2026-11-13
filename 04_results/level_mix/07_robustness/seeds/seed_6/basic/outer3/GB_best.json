@@ -1,0 +1,14 @@
+{
+ "params": {
+  "n_estimators": 500,
+  "learning_rate": 0.1,
+  "max_depth": 2,
+  "max_leaf_nodes": null,
+  "min_samples_split": 8,
+  "min_samples_leaf": 3,
+  "subsample": 1.0
+ },
+ "seed": 6,
+ "group": "mix",
+ "seconds": 88.2
+}
